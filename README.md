@@ -1,8 +1,11 @@
 # lager-avvik
 
-A mockup that demonstrates how weekly discrepancy ("avvik") notifications to
-purchasers ("innkjøpere") could work. It exists to show the concept, not to
-send anything real:
+A mockup for the warehouse/back-office team ("lageravdelingen") who clean up
+order discrepancies ("avvik"). **This page is internal only - purchasers
+("innkjøpere") never see it.** The intended real-world flow is: a purchaser
+gets a single weekly email about their discrepancy and does as little as
+possible; if they reply or otherwise flag something, that becomes a comment
+on the avvik here. It exists to show the concept, not to send anything real:
 
 - All data is seeded test data (`src/mockData.js`). Nothing here reads from
   `dwh` or `aa-x-s-14`.
@@ -13,11 +16,18 @@ send anything real:
   shape: which order, what the discrepancy is, the numbered actions required
   from the purchaser, and who to contact with questions (Finance). Each
   avvik row shows how many times it's been notified, the full history of who
-  was notified and when, and a "Vis e-posteksempel" button to preview the
-  exact email for that avvik on demand.
+  was notified and when, and a "Vis e-posteksempel" button to preview/hide
+  the exact email for that avvik on demand.
+- The top of the page shows counts (total / open / resolved) and the top 3
+  purchasers by number of avvik, so the team can see where to focus.
+- The avvik table can be filtered by order, purchaser, discrepancy type, and
+  status - filters are client-side and combine (all active filters must
+  match).
 - State is in-memory and resets when the process restarts.
-- Each avvik has a comment thread. Comments show who wrote them - there's no
-  login, so the commenter types their own name each time.
+- Each avvik has a comment thread, showing who wrote each comment. There's no
+  login, so whoever adds one (the team, or a stand-in for a purchaser's
+  reply) types their own name. A real inbound-email-to-comment pipeline isn't
+  built - see "What's deliberately not here yet" below.
 - The UI uses Intility's real [Bifrost design system](https://bifrost.intility.com/)
   (`@intility/bifrost-css`, loaded via CDN in `src/dashboard.js`), forced into
   dark mode (`data-bf-color-mode="dark"`). For a production app this should be
@@ -55,7 +65,7 @@ twice back to back). No database or network access is needed to run them.
 | `GET` | `/` | Dashboard (HTML). |
 | `GET` | `/api/avvik` | List mock avvik. |
 | `POST` | `/api/avvik/:id/resolve` | Mark one resolved. |
-| `GET` | `/api/notifications` | Log of simulated email previews (who was notified, when). |
+| `GET` | `/api/notifications` | Log of simulated email previews (who was notified, when). Not shown on the dashboard anymore, still available for inspection. |
 | `POST` | `/api/jobs/run-weekly` | Manually trigger the weekly check (demo only). |
 | `POST` | `/api/avvik/:id/comments` | Add a comment (`{"author": "...", "text": "..."}`). |
 | `GET` | `/api/avvik/:id/preview-email` | Render the exact email template for one avvik, regardless of whether it's currently due. |
@@ -74,6 +84,10 @@ setup that are out of scope for a mockup:
   Exchange Online, an internal SMTP relay (needs a Link, since SMTP isn't port
   443), or a third-party API like SendGrid (needs an egress rule + API key
   secret).
+- **Turning a purchaser's reply into a comment.** Today a comment is just a
+  free-text field anyone with access to this page can fill in. Making a real
+  email reply land here automatically needs an inbound mail pipeline (e.g. a
+  shared mailbox polled via Microsoft Graph) - not built.
 - **Persistent storage.** The in-memory store here would become a Minato
   managed Postgres database (already scoped for this app) so avvik and
   notification history survive restarts.

@@ -28,12 +28,50 @@ function renderNotificationHistory(avvikId, notifications) {
     .join('');
 }
 
+function renderStats(avvikList) {
+  const open = avvikList.filter((a) => !a.resolved).length;
+  const resolved = avvikList.length - open;
+
+  const counts = new Map();
+  for (const a of avvikList) {
+    counts.set(a.purchaserName, (counts.get(a.purchaserName) || 0) + 1);
+  }
+  const top3 = [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3);
+
+  const topList = top3.length
+    ? top3
+        .map(([name, count]) => `<li>${escapeHtml(name)} — ${count} avvik</li>`)
+        .join('')
+    : '<li class="empty">Ingen avvik registrert.</li>';
+
+  return `
+  <div class="stats">
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${avvikList.length}</div>
+      <div class="stat-label">Avvik totalt</div>
+    </div></div>
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${open}</div>
+      <div class="stat-label">Åpne</div>
+    </div></div>
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${resolved}</div>
+      <div class="stat-label">Løste</div>
+    </div></div>
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-label">Flest avvik (totalt)</div>
+      <ol class="top-list">${topList}</ol>
+    </div></div>
+  </div>`;
+}
+
 function renderDashboard(avvikList, notifications) {
   const rows = avvikList
     .map((a) => {
       const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
+      const status = a.resolved ? 'løst' : 'åpen';
       return `
-    <tr>
+    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml(a.purchaserName.toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}" data-status="${status}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${escapeHtml(a.purchaserName)}</td>
       <td>${escapeHtml(a.discrepancyType)}</td>
@@ -63,17 +101,6 @@ function renderDashboard(avvikList, notifications) {
     })
     .join('');
 
-  const notifRows = notifications
-    .map(
-      (n) => `
-    <tr>
-      <td>${new Date(n.sentAt).toLocaleString('no-NO')}</td>
-      <td>${escapeHtml(n.to)}</td>
-      <td>${escapeHtml(n.subject)}</td>
-    </tr>`
-    )
-    .join('');
-
   return `<!DOCTYPE html>
 <html lang="no" data-bf-color-mode="dark">
 <head>
@@ -94,29 +121,48 @@ function renderDashboard(avvikList, notifications) {
   form.add-comment .bf-input { width: auto; }
   .preview-email { margin-top: var(--bfs8); }
   .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
+  .stats { display: flex; gap: var(--bfs16); margin-top: var(--bfs24); flex-wrap: wrap; }
+  .stats .bf-card { min-width: 10rem; }
+  .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; }
+  .stat-label { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
+  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); }
+  .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); }
+  .filter-row .bf-input, .filter-row .bf-select { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; }
 </style>
 </head>
 <body>
-  <span class="bf-badge bfc-attn-bg">Mockup — ingen ekte e-post sendes</span>
-  <h1>Lager-avvik: varsling til innkjøpere</h1>
-  <p style="color: var(--bfc-base-c-dimmed)">Denne siden viser hvordan ukentlig varsling om avvik på ordre kunne fungert.
-     Data er testdata, og «sendte e-poster» er kun simulerte forhåndsvisninger —
-     ingenting sendes ut på ekte.</p>
+  <span class="bf-badge bfc-attn-bg">Mockup — kun for lageravdelingen</span>
+  <h1>Lager-avvik</h1>
+  <p style="color: var(--bfc-base-c-dimmed)">Denne siden er for oss som rydder opp i avvik - innkjøperne ser den ikke.
+     De får kun en e-post om avviket sitt; svarer de på den, eller gir beskjed på annen måte,
+     legger vi det inn som en kommentar her. «Sendte e-poster» er kun simulerte forhåndsvisninger —
+     ingenting sendes ut på ekte i denne mockupen.</p>
   <button type="button" id="run-job" class="bf-button bf-button-filled">Kjør ukentlig jobb nå (demo)</button>
+${renderStats(avvikList)}
 
   <section>
     <h2>Avvik</h2>
     <table class="bf-table">
-      <thead><tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Status</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr></thead>
+      <thead>
+        <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Status</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+        <tr class="filter-row">
+          <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+          <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+          <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+          <th>
+            <select class="bf-select filter-input" data-col="status">
+              <option value="">Alle</option>
+              <option value="åpen">Åpen</option>
+              <option value="løst">Løst</option>
+            </select>
+          </th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
       <tbody>${rows}</tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Alle sendte varsler (hvem er varslet på e-post, og når)</h2>
-    <table class="bf-table">
-      <thead><tr><th>Tidspunkt</th><th>Til</th><th>Emne</th></tr></thead>
-      <tbody>${notifRows}</tbody>
     </table>
   </section>
 
@@ -169,6 +215,25 @@ function renderDashboard(avvikList, notifications) {
           pre.textContent = 'Kunne ikke laste e-posteksempel: ' + err.message;
         }
       });
+    });
+    const filterInputs = document.querySelectorAll('.filter-input');
+    function applyFilters() {
+      const filters = {};
+      filterInputs.forEach((el) => {
+        const value = el.value.trim().toLowerCase();
+        if (value) filters[el.dataset.col] = value;
+      });
+      document.querySelectorAll('.avvik-row').forEach((row) => {
+        const match = Object.keys(filters).every((col) => {
+          if (col === 'status') return row.dataset.status === filters[col];
+          return row.dataset[col].includes(filters[col]);
+        });
+        row.hidden = !match;
+      });
+    }
+    filterInputs.forEach((el) => {
+      el.addEventListener('input', applyFilters);
+      el.addEventListener('change', applyFilters);
     });
   </script>
 </body>
