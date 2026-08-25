@@ -149,8 +149,14 @@ function renderDashboard(avvikList, notifications) {
       btn.addEventListener('click', async () => {
         const id = btn.dataset.id;
         const pre = document.querySelector('.email-preview[data-id="' + id + '"]');
+        if (!pre.hidden) {
+          pre.hidden = true;
+          btn.textContent = 'Vis e-posteksempel';
+          return;
+        }
         pre.hidden = false;
         pre.textContent = 'Laster e-posteksempel...';
+        btn.textContent = 'Skjul e-posteksempel';
         try {
           const res = await fetch('/api/avvik/' + id + '/preview-email');
           if (!res.ok) {
