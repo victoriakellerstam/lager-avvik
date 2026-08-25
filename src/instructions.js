@@ -1,38 +1,47 @@
 'use strict';
 
-// What the purchaser should actually do, per discrepancy type. Keyed on the
+// The real scenario catalog (SCENARIOER OG ANBEFALTE TILTAK). Keyed on the
 // exact discrepancyType string on the avvik. Unknown types fall back to
 // DEFAULT_STEPS so the email template never ends up without guidance.
 const INSTRUCTIONS = {
-  'Feil antall levert': [
-    'Tell opp hva som faktisk kom inn på lager og sammenlign med ordrebekreftelsen.',
-    'Registrer det avvikende antallet i ordresystemet.',
-    'Kontakt leverandøren for å avklare om resten kommer i egen forsendelse, eller om ordren skal krediteres.',
+  'Ikke mottatt faktura i Medius': [
+    'Sjekk om fakturaen er sendt til riktig fakturaadresse/referanse.',
+    'Be leverandøren sende fakturaen på nytt hvis den ikke finnes hos dem.',
+    'Følg opp at fakturaen blir registrert i Medius.',
   ],
-  'Feil pris fakturert': [
-    'Sammenlign fakturert pris med prisen i bestillingen eller avtalen.',
-    'Meld avviket til leverandøren og be om kreditnota eller korrigert faktura.',
-    'Oppdater ordren når korrigert faktura er mottatt.',
+  Internbestilling: [
+    'Avklar om varene skal skrives ut eller videreselges internt.',
+    'Fullfør uttaket eller videresalget av varene.',
+    'Be om at innkjøpsordren slettes i Visma når dette er gjort.',
   ],
-  'Mangler kvittering': [
-    'Sjekk om kvitteringen har kommet på e-post eller i leverandørportalen.',
-    'Be leverandøren om en kopi av kvitteringen hvis den ikke finnes.',
-    'Legg kvitteringen ved ordren når den er mottatt.',
+  'Kostnadsfaktura — reverser': [
+    'Reverser kostnadsfakturaen.',
+    'Før beløpet mot riktig innkjøpsordre.',
+    'Bekreft at reverseringen er registrert korrekt.',
   ],
-  'Feil varenummer': [
-    'Sjekk varenummeret på den fysiske varen mot det som står på ordrelinjen.',
-    'Korriger varenummeret i ordresystemet.',
-    'Gi lager beskjed slik at varen kan plasseres på riktig lagerplass.',
+  'Kredittkort lisenskjøp, feilaktig mottatt': [
+    'Sjekk kredittkortbelastningen mot lisenskjøpet.',
+    'Korriger registreringen slik at den ikke lenger står som mottatt via ordren.',
+    'Meld fra til Finance om korrigeringen.',
   ],
-  'Feil leveringsadresse': [
-    'Bekreft riktig leveringsadresse med mottaker.',
-    'Oppdater leveringsadressen på ordren.',
-    'Gi beskjed til lager/logistikk om at varen må omadresseres eller hentes på nytt.',
+  'Manuell ordre': [
+    'Finn eller be om fakturaen som hører til den manuelle ordren.',
+    'Match fakturaen mot ordren som ble opprettet uten PO-nummer.',
+    'Send fakturaen videre til godkjenning.',
   ],
-  'Dobbel fakturering': [
-    'Sjekk om samme ordre er fakturert to ganger.',
-    'Meld avviket til leverandøren og be om kreditnota for den doble fakturaen.',
-    'Bekreft at kreditnotaen er registrert riktig når den er mottatt.',
+  'Ordre opprettet med feilaktig distributør': [
+    'Identifiser riktig distributør for bestillingen.',
+    'Korriger distributøren på ordren.',
+    'Bekreft med leverandøren at endringen er registrert.',
+  ],
+  'Spesielle caser - Finance': [
+    'Ta kontakt med Finance for videre håndtering av denne saken.',
+    'Følg opp saken til Finance bekrefter at den er løst.',
+  ],
+  'Varefaktura — under behandling': [
+    'Sjekk status på fakturaen i godkjenningsflyten i Medius.',
+    'Følg opp godkjenner hvis fakturaen har stått lenge under behandling.',
+    'Bekreft når fakturaen er godkjent og bokført.',
   ],
 };
 
@@ -46,4 +55,4 @@ function getInstructions(discrepancyType) {
   return INSTRUCTIONS[discrepancyType] || DEFAULT_STEPS;
 }
 
-module.exports = { getInstructions, DEFAULT_STEPS };
+module.exports = { getInstructions, DEFAULT_STEPS, INSTRUCTIONS };

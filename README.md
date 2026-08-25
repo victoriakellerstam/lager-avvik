@@ -12,6 +12,14 @@ on the avvik here. It exists to show the concept, not to send anything real:
 - No email is ever sent. The weekly job only builds an email *preview*
   (subject + body) and logs it, so you can see who would have been emailed
   and what it would have said.
+- Discrepancy types match the real scenario catalog ("SCENARIOER OG
+  ANBEFALTE TILTAK"): Ikke mottatt faktura i Medius, Internbestilling,
+  Kostnadsfaktura — reverser, Kredittkort lisenskjøp/feilaktig mottatt,
+  Manuell ordre, Ordre opprettet med feilaktig distributør, Spesielle caser -
+  Finance, and Varefaktura — under behandling. Each has its own color-coded
+  badge (`src/typeBadges.js`) and its own instruction steps
+  (`src/instructions.js`), derived from the recommended actions for that
+  scenario.
 - The email template (`src/notify.js` + `src/instructions.js`) follows the
   shape: which order, what the discrepancy is, the numbered actions required
   from the purchaser, and who to contact with questions (Finance). Each

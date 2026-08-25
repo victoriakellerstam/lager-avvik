@@ -1,5 +1,7 @@
 'use strict';
 
+const { getTypeBadgeClass } = require('./typeBadges');
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -71,7 +73,7 @@ function renderAvvikRow(a, notifications, includeResolveColumn) {
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml(a.purchaserName.toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${escapeHtml(a.purchaserName)}</td>
-      <td>${escapeHtml(a.discrepancyType)}</td>
+      <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>${a.lastNotifiedAt ? new Date(a.lastNotifiedAt).toLocaleDateString('no-NO') : '—'}</td>
       ${includeResolveColumn ? `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button></td>` : ''}
       <td>

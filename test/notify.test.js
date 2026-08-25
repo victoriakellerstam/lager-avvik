@@ -37,7 +37,7 @@ test('the email preview names the order, the purchaser, and never claims to have
     orderId: 'SO-1',
     purchaserName: 'Kari Nordmann',
     purchaserEmail: 'kari.nordmann@example.com',
-    discrepancyType: 'Feil antall levert',
+    discrepancyType: 'Ikke mottatt faktura i Medius',
   });
   assert.equal(preview.to, 'kari.nordmann@example.com');
   assert.match(preview.subject, /SO-1/);
@@ -50,10 +50,10 @@ test('the email preview includes numbered, type-specific instructions', () => {
     orderId: 'SO-2',
     purchaserName: 'Ola Hansen',
     purchaserEmail: 'ola.hansen@example.com',
-    discrepancyType: 'Feil pris fakturert',
+    discrepancyType: 'Kostnadsfaktura — reverser',
   });
-  assert.match(preview.body, /1\. Sammenlign fakturert pris/);
-  assert.match(preview.body, /kreditnota/);
+  assert.match(preview.body, /1\. Reverser kostnadsfakturaen/);
+  assert.match(preview.body, /innkjøpsordre/);
 });
 
 test('an unknown discrepancy type still gets generic, numbered instructions', () => {
@@ -71,10 +71,10 @@ test('the email follows the requested shape: order, what the discrepancy is, req
     orderId: 'SO-99999-12345',
     purchaserName: 'Kari Nordmann',
     purchaserEmail: 'kari.nordmann@example.com',
-    discrepancyType: 'Feil antall levert',
+    discrepancyType: 'Manuell ordre',
   });
   assert.match(preview.body, /Avvik på din ordre SO-99999-12345\./);
-  assert.match(preview.body, /Avviket gjelder: Feil antall levert\./);
+  assert.match(preview.body, /Avviket gjelder: Manuell ordre\./);
   assert.match(preview.body, /Tiltak som kreves fra deg:/);
   assert.match(preview.body, /kontakt med Finance/);
 });

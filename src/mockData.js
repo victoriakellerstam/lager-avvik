@@ -7,14 +7,16 @@ function daysAgo(n) {
   return d.toISOString();
 }
 
-// Test data only. No real orders, purchasers, or email addresses.
+// Test data only. No real orders, purchasers, or email addresses. The
+// discrepancyType values match the real scenario catalog (SCENARIOER OG
+// ANBEFALTE TILTAK), see src/instructions.js and src/typeBadges.js.
 const SEED_AVVIK = [
   {
     id: 1,
     orderId: 'SO-10245',
     purchaserName: 'Kari Nordmann',
     purchaserEmail: 'kari.nordmann@example.com',
-    discrepancyType: 'Feil antall levert',
+    discrepancyType: 'Ikke mottatt faktura i Medius',
     createdAt: daysAgo(20),
     resolved: false,
     resolvedAt: null,
@@ -23,7 +25,7 @@ const SEED_AVVIK = [
       {
         id: 1,
         author: 'Ole (lager)',
-        text: 'Har sjekket lageret, avviket stemmer. Venter pa svar fra innkjoper.',
+        text: 'Har sjekket Medius, ingen faktura registrert enna. Venter pa svar fra innkjoper.',
         createdAt: daysAgo(8),
       },
     ],
@@ -33,7 +35,7 @@ const SEED_AVVIK = [
     orderId: 'SO-10312',
     purchaserName: 'Ola Hansen',
     purchaserEmail: 'ola.hansen@example.com',
-    discrepancyType: 'Feil pris fakturert',
+    discrepancyType: 'Internbestilling',
     createdAt: daysAgo(15),
     resolved: false,
     resolvedAt: null,
@@ -45,7 +47,7 @@ const SEED_AVVIK = [
     orderId: 'SO-10399',
     purchaserName: 'Per Iversen',
     purchaserEmail: 'per.iversen@example.com',
-    discrepancyType: 'Mangler kvittering',
+    discrepancyType: 'Kostnadsfaktura — reverser',
     createdAt: daysAgo(5),
     resolved: false,
     resolvedAt: null,
@@ -54,7 +56,7 @@ const SEED_AVVIK = [
       {
         id: 1,
         author: 'Per Iversen',
-        text: 'Skal sjekke med transportoren denne uken.',
+        text: 'Skal reversere fakturaen denne uken.',
         createdAt: daysAgo(4),
       },
     ],
@@ -64,7 +66,7 @@ const SEED_AVVIK = [
     orderId: 'SO-10410',
     purchaserName: 'Silje Berg',
     purchaserEmail: 'silje.berg@example.com',
-    discrepancyType: 'Feil varenummer',
+    discrepancyType: 'Kredittkort lisenskjøp, feilaktig mottatt',
     createdAt: daysAgo(30),
     resolved: true,
     resolvedAt: daysAgo(2),
@@ -73,7 +75,7 @@ const SEED_AVVIK = [
       {
         id: 1,
         author: 'Silje Berg',
-        text: 'Rettet i systemet, varenummeret er na korrekt.',
+        text: 'Rettet i systemet, lisenskjopet er na korrekt registrert.',
         createdAt: daysAgo(2),
       },
     ],
@@ -83,7 +85,7 @@ const SEED_AVVIK = [
     orderId: 'SO-10455',
     purchaserName: 'Mona Lund',
     purchaserEmail: 'mona.lund@example.com',
-    discrepancyType: 'Feil leveringsadresse',
+    discrepancyType: 'Manuell ordre',
     createdAt: daysAgo(2),
     resolved: false,
     resolvedAt: null,
@@ -95,11 +97,35 @@ const SEED_AVVIK = [
     orderId: 'SO-10501',
     purchaserName: 'Thomas Vik',
     purchaserEmail: 'thomas.vik@example.com',
-    discrepancyType: 'Dobbel fakturering',
+    discrepancyType: 'Ordre opprettet med feilaktig distributør',
     createdAt: daysAgo(40),
     resolved: false,
     resolvedAt: null,
     lastNotifiedAt: daysAgo(1),
+    comments: [],
+  },
+  {
+    id: 7,
+    orderId: 'SO-10530',
+    purchaserName: 'Kari Nordmann',
+    purchaserEmail: 'kari.nordmann@example.com',
+    discrepancyType: 'Spesielle caser - Finance',
+    createdAt: daysAgo(12),
+    resolved: false,
+    resolvedAt: null,
+    lastNotifiedAt: null,
+    comments: [],
+  },
+  {
+    id: 8,
+    orderId: 'SO-10560',
+    purchaserName: 'Ola Hansen',
+    purchaserEmail: 'ola.hansen@example.com',
+    discrepancyType: 'Varefaktura — under behandling',
+    createdAt: daysAgo(9),
+    resolved: false,
+    resolvedAt: null,
+    lastNotifiedAt: daysAgo(6),
     comments: [],
   },
 ];
