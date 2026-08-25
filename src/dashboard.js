@@ -80,26 +80,41 @@ function renderDashboard(avvikList, notifications) {
 <meta charset="utf-8">
 <title>Lager-avvik (mockup)</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
-  h1 { margin-bottom: 0.2rem; }
-  .badge { display:inline-block; padding:0.2rem 0.6rem; background:#fde68a; border-radius:0.4rem; font-size:0.8rem; }
-  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-  th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; font-size: 0.9rem; }
-  th { background: #f3f4f6; }
-  button { cursor: pointer; }
+  :root {
+    --bg: #0f1115;
+    --surface: #1a1d24;
+    --surface-alt: #22262f;
+    --border: #333844;
+    --text: #e5e7eb;
+    --text-muted: #9aa1ad;
+    --accent: #f5c451;
+    --accent-text: #1a1408;
+    --link: #7aa2f7;
+  }
+  body { font-family: system-ui, sans-serif; margin: 2rem; color: var(--text); background: var(--bg); }
+  h1 { margin-bottom: 0.2rem; color: #fff; }
+  h2 { color: #fff; }
+  p { color: var(--text-muted); }
+  .badge { display:inline-block; padding:0.2rem 0.6rem; background: var(--accent); color: var(--accent-text); border-radius:0.4rem; font-size:0.8rem; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; background: var(--surface); }
+  th, td { border: 1px solid var(--border); padding: 0.5rem; text-align: left; font-size: 0.9rem; }
+  th { background: var(--surface-alt); color: #fff; }
+  button { cursor: pointer; background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); border-radius: 0.3rem; padding: 0.35rem 0.7rem; }
+  button:hover { background: var(--border); }
+  #run-job { background: var(--accent); color: var(--accent-text); border: none; font-weight: 600; padding: 0.5rem 1rem; }
   section { margin-top: 2.5rem; }
-  details summary { cursor: pointer; }
+  details summary { cursor: pointer; color: var(--link); }
   ul.comments { list-style: none; padding: 0; margin: 0.5rem 0; }
-  ul.comments li { padding: 0.25rem 0; border-bottom: 1px solid #eee; font-size: 0.85rem; }
-  ul.comments li.empty { color: #777; font-style: italic; }
-  ul.comments .ts { color: #777; font-size: 0.75rem; }
+  ul.comments li { padding: 0.25rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  ul.comments li.empty { color: var(--text-muted); font-style: italic; }
+  ul.comments .ts { color: var(--text-muted); font-size: 0.75rem; }
   form.add-comment { margin-top: 0.5rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
-  form.add-comment input { padding: 0.3rem; }
+  form.add-comment input { padding: 0.3rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 0.25rem; }
   ul.notif-history { list-style: none; padding: 0; margin: 0.5rem 0; }
-  ul.notif-history li { padding: 0.25rem 0; border-bottom: 1px solid #eee; font-size: 0.85rem; }
-  ul.notif-history li.empty { color: #777; font-style: italic; }
+  ul.notif-history li { padding: 0.25rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  ul.notif-history li.empty { color: var(--text-muted); font-style: italic; }
   .preview-email { margin-top: 0.5rem; }
-  .email-preview { white-space: pre-wrap; background: #f9fafb; border: 1px solid #ddd; padding: 0.6rem; margin-top: 0.5rem; font-size: 0.8rem; max-width: 32rem; }
+  .email-preview { white-space: pre-wrap; background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); padding: 0.6rem; margin-top: 0.5rem; font-size: 0.8rem; max-width: 32rem; }
 </style>
 </head>
 <body>
@@ -164,7 +179,7 @@ function renderDashboard(avvikList, notifications) {
             return;
           }
           const data = await res.json();
-          pre.textContent = 'Til: ' + data.to + '\nEmne: ' + data.subject + '\n\n' + data.body;
+          pre.textContent = 'Til: ' + data.to + '\\nEmne: ' + data.subject + '\\n\\n' + data.body;
         } catch (err) {
           pre.textContent = 'Kunne ikke laste e-posteksempel: ' + err.message;
         }
