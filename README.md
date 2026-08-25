@@ -20,9 +20,10 @@ on the avvik here. It exists to show the concept, not to send anything real:
   the exact email for that avvik on demand.
 - The top of the page shows counts (total / open / resolved) and the top 3
   purchasers by number of avvik, so the team can see where to focus.
-- The avvik table can be filtered by order, purchaser, discrepancy type, and
-  status - filters are client-side and combine (all active filters must
-  match).
+- Avvik are split into an "Åpne avvik" list (top, with filters by order,
+  purchaser, and discrepancy type - client-side, and they combine) and a
+  collapsed "Arkiv" of resolved avvik below, so the active work stays the
+  focus and closed cases don't clutter the view.
 - State is in-memory and resets when the process restarts.
 - Each avvik has a comment thread, showing who wrote each comment. There's no
   login, so whoever adds one (the team, or a stand-in for a purchaser's
