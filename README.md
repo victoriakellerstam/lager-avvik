@@ -18,6 +18,10 @@ send anything real:
 - State is in-memory and resets when the process restarts.
 - Each avvik has a comment thread. Comments show who wrote them - there's no
   login, so the commenter types their own name each time.
+- The UI uses Intility's real [Bifrost design system](https://bifrost.intility.com/)
+  (`@intility/bifrost-css`, loaded via CDN in `src/dashboard.js`), forced into
+  dark mode (`data-bf-color-mode="dark"`). For a production app this should be
+  self-hosted instead of pulled from unpkg - see Bifrost's own CSS install docs.
 
 ## Run it locally
 
