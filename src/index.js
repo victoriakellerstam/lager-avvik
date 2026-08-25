@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 8080;
 
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(payload);
 }
 
@@ -58,7 +58,7 @@ function createServer() {
       }
 
       if (req.method === 'GET' && pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(renderDashboard(store.listAvvik(), store.listNotifications()));
       }
 
