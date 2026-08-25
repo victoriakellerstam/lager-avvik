@@ -64,7 +64,55 @@ function renderStats(avvikList) {
       <div class="stat-label">Flest avvik (totalt)</div>
       <ol class="top-list">${topList}</ol>
     </div></div>
+    ${renderTypeDonut(avvikList)}
   </div>`;
+}
+
+// A dependency-free donut chart: each ring segment is one <circle> with a
+// 100-unit circumference (r = 15.91549430918954, since 2*pi*r = 100), so
+// stroke-dasharray/-dashoffset can be expressed directly as percentages.
+// Colors reuse the same Bifrost category as the type's badge, so the chart
+// and the table agree visually.
+function renderTypeDonut(avvikList) {
+  const total = avvikList.length;
+  const counts = new Map();
+  for (const a of avvikList) {
+    counts.set(a.discrepancyType, (counts.get(a.discrepancyType) || 0) + 1);
+  }
+  const entries = [...counts.entries()].sort((x, y) => y[1] - x[1]);
+
+  let cumulative = 0;
+  const segments = entries
+    .map(([type, count]) => {
+      const percent = total ? (count / total) * 100 : 0;
+      const dashoffset = 25 - cumulative;
+      cumulative += percent;
+      const color = `var(--bfc-${getTypeBadgeClass(type)})`;
+      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"></circle>`;
+    })
+    .join('');
+
+  const legend = entries.length
+    ? entries
+        .map(([type, count]) => {
+          const color = `var(--bfc-${getTypeBadgeClass(type)})`;
+          const percent = total ? Math.round((count / total) * 100) : 0;
+          return `<li><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(type)} — ${count} (${percent}%)</li>`;
+        })
+        .join('')
+    : '<li class="empty">Ingen avvik registrert.</li>';
+
+  return `
+    <div class="bf-card donut-card"><div class="bf-card-content">
+      <div class="bf-card-title">Fordeling per avvikstype</div>
+      <div class="donut-wrap">
+        <svg viewBox="0 0 42 42" class="donut" role="img" aria-label="Fordeling av avvikstyper">
+          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--bfc-base-2)" stroke-width="3"></circle>
+          ${segments}
+        </svg>
+        <ul class="donut-legend">${legend}</ul>
+      </div>
+    </div></div>`;
 }
 
 function renderAvvikRow(a, notifications, includeResolveColumn) {
@@ -142,8 +190,15 @@ function renderDashboard(avvikList, notifications) {
   .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; }
   .stat-label { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
   .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); }
+  .donut-card { min-width: 20rem; flex: 1 1 20rem; }
+  .donut-wrap { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
+  .donut { width: 8rem; height: 8rem; flex-shrink: 0; transform: rotate(0deg); }
+  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-s); flex: 1 1 12rem; }
+  .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; }
+  .donut-legend li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
+  .legend-swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: var(--bf-radius-full); flex-shrink: 0; }
   .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
-  .filter-row .bf-input, .filter-row .bf-select { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; }
+  .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
 </style>
 </head>
 <body>
