@@ -9,6 +9,12 @@ send anything real:
 - No email is ever sent. The weekly job only builds an email *preview*
   (subject + body) and logs it, so you can see who would have been emailed
   and what it would have said.
+- The email template (`src/notify.js` + `src/instructions.js`) gives the
+  purchaser concrete, numbered steps for resolving their specific
+  discrepancy type - not just "please look into this." Each avvik row shows
+  how many times it's been notified, the full history of who was notified
+  and when, and a "Vis e-posteksempel" button to preview the exact email
+  for that avvik on demand.
 - State is in-memory and resets when the process restarts.
 - Each avvik has a comment thread. Comments show who wrote them - there's no
   login, so the commenter types their own name each time.
@@ -45,9 +51,10 @@ twice back to back). No database or network access is needed to run them.
 | `GET` | `/` | Dashboard (HTML). |
 | `GET` | `/api/avvik` | List mock avvik. |
 | `POST` | `/api/avvik/:id/resolve` | Mark one resolved. |
-| `GET` | `/api/notifications` | Log of simulated email previews. |
+| `GET` | `/api/notifications` | Log of simulated email previews (who was notified, when). |
 | `POST` | `/api/jobs/run-weekly` | Manually trigger the weekly check (demo only). |
 | `POST` | `/api/avvik/:id/comments` | Add a comment (`{"author": "...", "text": "..."}`). |
+| `GET` | `/api/avvik/:id/preview-email` | Render the exact email template for one avvik, regardless of whether it's currently due. |
 
 ## What's deliberately not here yet
 

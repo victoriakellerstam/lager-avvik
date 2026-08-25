@@ -3,6 +3,7 @@
 const http = require('node:http');
 const store = require('./store');
 const { runWeeklyJob } = require('./job');
+const { buildEmailPreview } = require('./notify');
 const { startScheduler } = require('./scheduler');
 const { renderDashboard } = require('./dashboard');
 
@@ -74,6 +75,13 @@ function createServer() {
 
       if (req.method === 'GET' && pathname === '/api/notifications') {
         return sendJson(res, 200, store.listNotifications());
+      }
+
+      const previewMatch = pathname.match(/^\/api\/avvik\/(\d+)\/preview-email$/);
+      if (req.method === 'GET' && previewMatch) {
+        const avvik = store.getAvvik(Number(previewMatch[1]));
+        if (!avvik) return sendJson(res, 404, { error: 'avvik not found' });
+        return sendJson(res, 200, buildEmailPreview(avvik));
       }
 
       const commentMatch = pathname.match(/^\/api\/avvik\/(\d+)\/comments$/);

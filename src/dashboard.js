@@ -18,10 +18,21 @@ function renderComments(comments) {
     .join('');
 }
 
+function renderNotificationHistory(avvikId, notifications) {
+  const entries = notifications.filter((n) => n.avvikId === avvikId);
+  if (!entries.length) return '<li class="empty">Ingen varsler sendt enna.</li>';
+  return entries
+    .map(
+      (n) => `<li>${new Date(n.sentAt).toLocaleString('no-NO')} — varslet <strong>${escapeHtml(n.to)}</strong></li>`
+    )
+    .join('');
+}
+
 function renderDashboard(avvikList, notifications) {
   const rows = avvikList
-    .map(
-      (a) => `
+    .map((a) => {
+      const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
+      return `
     <tr>
       <td>${escapeHtml(a.orderId)}</td>
       <td>${escapeHtml(a.purchaserName)}</td>
@@ -40,8 +51,16 @@ function renderDashboard(avvikList, notifications) {
           </form>
         </details>
       </td>
-    </tr>`
-    )
+      <td>
+        <details>
+          <summary>${timesNotified} ganger varslet på e-post</summary>
+          <ul class="notif-history">${renderNotificationHistory(a.id, notifications)}</ul>
+        </details>
+        <button class="preview-email" data-id="${a.id}">Vis e-posteksempel</button>
+        <pre class="email-preview" data-id="${a.id}" hidden></pre>
+      </td>
+    </tr>`;
+    })
     .join('');
 
   const notifRows = notifications
@@ -76,6 +95,11 @@ function renderDashboard(avvikList, notifications) {
   ul.comments .ts { color: #777; font-size: 0.75rem; }
   form.add-comment { margin-top: 0.5rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
   form.add-comment input { padding: 0.3rem; }
+  ul.notif-history { list-style: none; padding: 0; margin: 0.5rem 0; }
+  ul.notif-history li { padding: 0.25rem 0; border-bottom: 1px solid #eee; font-size: 0.85rem; }
+  ul.notif-history li.empty { color: #777; font-style: italic; }
+  .preview-email { margin-top: 0.5rem; }
+  .email-preview { white-space: pre-wrap; background: #f9fafb; border: 1px solid #ddd; padding: 0.6rem; margin-top: 0.5rem; font-size: 0.8rem; max-width: 32rem; }
 </style>
 </head>
 <body>
@@ -89,13 +113,13 @@ function renderDashboard(avvikList, notifications) {
   <section>
     <h2>Avvik</h2>
     <table>
-      <thead><tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Status</th><th>Sist varslet</th><th></th><th>Kommentarer</th></tr></thead>
+      <thead><tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Status</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </section>
 
   <section>
-    <h2>Simulerte varsler (e-postforhåndsvisning)</h2>
+    <h2>Alle sendte varsler (hvem er varslet på e-post, og når)</h2>
     <table>
       <thead><tr><th>Tidspunkt</th><th>Til</th><th>Emne</th></tr></thead>
       <tbody>${notifRows}</tbody>
@@ -125,6 +149,16 @@ function renderDashboard(avvikList, notifications) {
           body: JSON.stringify({ author, text }),
         });
         if (res.ok) location.reload();
+      });
+    });
+    document.querySelectorAll('.preview-email').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const res = await fetch('/api/avvik/' + id + '/preview-email');
+        const data = await res.json();
+        const pre = document.querySelector('.email-preview[data-id="' + id + '"]');
+        pre.hidden = false;
+        pre.textContent = 'Til: ' + data.to + '\nEmne: ' + data.subject + '\n\n' + data.body;
       });
     });
   </script>

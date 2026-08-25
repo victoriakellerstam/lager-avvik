@@ -44,3 +44,24 @@ test('the email preview names the order, the purchaser, and never claims to have
   assert.match(preview.body, /Kari Nordmann/);
   assert.match(preview.body, /mockup/);
 });
+
+test('the email preview includes numbered, type-specific instructions', () => {
+  const preview = buildEmailPreview({
+    orderId: 'SO-2',
+    purchaserName: 'Ola Hansen',
+    purchaserEmail: 'ola.hansen@example.com',
+    discrepancyType: 'Feil pris fakturert',
+  });
+  assert.match(preview.body, /1\. Sammenlign fakturert pris/);
+  assert.match(preview.body, /kreditnota/);
+});
+
+test('an unknown discrepancy type still gets generic, numbered instructions', () => {
+  const preview = buildEmailPreview({
+    orderId: 'SO-3',
+    purchaserName: 'Test Person',
+    purchaserEmail: 'test.person@example.com',
+    discrepancyType: 'Noe helt annet',
+  });
+  assert.match(preview.body, /1\. Undersøk avviket/);
+});
