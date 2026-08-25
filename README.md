@@ -10,6 +10,8 @@ send anything real:
   (subject + body) and logs it, so you can see who would have been emailed
   and what it would have said.
 - State is in-memory and resets when the process restarts.
+- Each avvik has a comment thread. Comments show who wrote them - there's no
+  login, so the commenter types their own name each time.
 
 ## Run it locally
 
@@ -45,6 +47,7 @@ twice back to back). No database or network access is needed to run them.
 | `POST` | `/api/avvik/:id/resolve` | Mark one resolved. |
 | `GET` | `/api/notifications` | Log of simulated email previews. |
 | `POST` | `/api/jobs/run-weekly` | Manually trigger the weekly check (demo only). |
+| `POST` | `/api/avvik/:id/comments` | Add a comment (`{"author": "...", "text": "..."}`). |
 
 ## What's deliberately not here yet
 

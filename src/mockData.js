@@ -19,6 +19,14 @@ const SEED_AVVIK = [
     resolved: false,
     resolvedAt: null,
     lastNotifiedAt: daysAgo(9),
+    comments: [
+      {
+        id: 1,
+        author: 'Ole (lager)',
+        text: 'Har sjekket lageret, avviket stemmer. Venter pa svar fra innkjoper.',
+        createdAt: daysAgo(8),
+      },
+    ],
   },
   {
     id: 2,
@@ -30,6 +38,7 @@ const SEED_AVVIK = [
     resolved: false,
     resolvedAt: null,
     lastNotifiedAt: daysAgo(3),
+    comments: [],
   },
   {
     id: 3,
@@ -41,6 +50,14 @@ const SEED_AVVIK = [
     resolved: false,
     resolvedAt: null,
     lastNotifiedAt: null,
+    comments: [
+      {
+        id: 1,
+        author: 'Per Iversen',
+        text: 'Skal sjekke med transportoren denne uken.',
+        createdAt: daysAgo(4),
+      },
+    ],
   },
   {
     id: 4,
@@ -52,6 +69,14 @@ const SEED_AVVIK = [
     resolved: true,
     resolvedAt: daysAgo(2),
     lastNotifiedAt: daysAgo(10),
+    comments: [
+      {
+        id: 1,
+        author: 'Silje Berg',
+        text: 'Rettet i systemet, varenummeret er na korrekt.',
+        createdAt: daysAgo(2),
+      },
+    ],
   },
   {
     id: 5,
@@ -63,6 +88,7 @@ const SEED_AVVIK = [
     resolved: false,
     resolvedAt: null,
     lastNotifiedAt: null,
+    comments: [],
   },
   {
     id: 6,
@@ -74,6 +100,7 @@ const SEED_AVVIK = [
     resolved: false,
     resolvedAt: null,
     lastNotifiedAt: daysAgo(1),
+    comments: [],
   },
 ];
 

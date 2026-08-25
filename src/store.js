@@ -4,7 +4,7 @@ const { SEED_AVVIK } = require('./mockData');
 
 // In-memory only: this mockup has no real database wired up yet. State resets
 // on restart. See README for what a persistent version would need.
-let avvikList = SEED_AVVIK.map((a) => ({ ...a }));
+let avvikList = SEED_AVVIK.map((a) => ({ ...a, comments: (a.comments || []).map((c) => ({ ...c })) }));
 let notifications = [];
 let nextNotificationId = 1;
 
@@ -43,9 +43,24 @@ function listNotifications() {
   return notifications;
 }
 
+// Comments are scoped to their avvik, so each avvik's own comment list gets
+// its own id sequence - callers only ever see comments for one avvik at a time.
+function addComment(id, author, text) {
+  const avvik = getAvvik(id);
+  if (!avvik) return null;
+  const comment = {
+    id: avvik.comments.length + 1,
+    author,
+    text,
+    createdAt: new Date().toISOString(),
+  };
+  avvik.comments.push(comment);
+  return comment;
+}
+
 // Test-only helper to reset state between test files.
 function _reset() {
-  avvikList = SEED_AVVIK.map((a) => ({ ...a }));
+  avvikList = SEED_AVVIK.map((a) => ({ ...a, comments: (a.comments || []).map((c) => ({ ...c })) }));
   notifications = [];
   nextNotificationId = 1;
 }
@@ -56,5 +71,6 @@ module.exports = {
   resolveAvvik,
   recordNotification,
   listNotifications,
+  addComment,
   _reset,
 };

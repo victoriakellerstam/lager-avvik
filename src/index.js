@@ -14,8 +14,35 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
+const MAX_BODY_BYTES = 10_000;
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    let bytes = 0;
+    req.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > MAX_BODY_BYTES) {
+        reject(Object.assign(new Error('payload too large'), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      data += chunk;
+    });
+    req.on('end', () => {
+      if (!data) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        reject(Object.assign(new Error('invalid json body'), { status: 400 }));
+      }
+    });
+    req.on('error', () => reject(Object.assign(new Error('bad request'), { status: 400 })));
+  });
+}
+
 function createServer() {
-  return http.createServer((req, res) => {
+  return http.createServer(async (req, res) => {
     let url;
     try {
       url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -47,6 +74,27 @@ function createServer() {
 
       if (req.method === 'GET' && pathname === '/api/notifications') {
         return sendJson(res, 200, store.listNotifications());
+      }
+
+      const commentMatch = pathname.match(/^\/api\/avvik\/(\d+)\/comments$/);
+      if (req.method === 'POST' && commentMatch) {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          return sendJson(res, err.status || 400, { error: err.message });
+        }
+        const author = typeof body.author === 'string' ? body.author.trim() : '';
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!author || !text) {
+          return sendJson(res, 400, { error: 'author and text are required' });
+        }
+        if (author.length > 100 || text.length > 2000) {
+          return sendJson(res, 400, { error: 'author or text is too long' });
+        }
+        const comment = store.addComment(Number(commentMatch[1]), author, text);
+        if (!comment) return sendJson(res, 404, { error: 'avvik not found' });
+        return sendJson(res, 201, comment);
       }
 
       if (req.method === 'POST' && pathname === '/api/jobs/run-weekly') {

@@ -8,6 +8,16 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
+function renderComments(comments) {
+  if (!comments.length) return '<li class="empty">Ingen kommentarer enna.</li>';
+  return comments
+    .map(
+      (c) => `<li><strong>${escapeHtml(c.author)}:</strong> ${escapeHtml(c.text)}
+        <span class="ts">(${new Date(c.createdAt).toLocaleString('no-NO')})</span></li>`
+    )
+    .join('');
+}
+
 function renderDashboard(avvikList, notifications) {
   const rows = avvikList
     .map(
@@ -19,6 +29,17 @@ function renderDashboard(avvikList, notifications) {
       <td>${a.resolved ? 'Løst' : 'Åpen'}</td>
       <td>${a.lastNotifiedAt ? new Date(a.lastNotifiedAt).toLocaleDateString('no-NO') : '—'}</td>
       <td>${a.resolved ? '' : `<button data-id="${a.id}" class="resolve">Marker løst</button>`}</td>
+      <td>
+        <details>
+          <summary>${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
+          <ul class="comments">${renderComments(a.comments)}</ul>
+          <form class="add-comment" data-id="${a.id}">
+            <input type="text" name="author" placeholder="Ditt navn" required maxlength="100">
+            <input type="text" name="text" placeholder="Skriv en kommentar" required maxlength="2000">
+            <button type="submit">Legg til</button>
+          </form>
+        </details>
+      </td>
     </tr>`
     )
     .join('');
@@ -48,6 +69,13 @@ function renderDashboard(avvikList, notifications) {
   th { background: #f3f4f6; }
   button { cursor: pointer; }
   section { margin-top: 2.5rem; }
+  details summary { cursor: pointer; }
+  ul.comments { list-style: none; padding: 0; margin: 0.5rem 0; }
+  ul.comments li { padding: 0.25rem 0; border-bottom: 1px solid #eee; font-size: 0.85rem; }
+  ul.comments li.empty { color: #777; font-style: italic; }
+  ul.comments .ts { color: #777; font-size: 0.75rem; }
+  form.add-comment { margin-top: 0.5rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  form.add-comment input { padding: 0.3rem; }
 </style>
 </head>
 <body>
@@ -61,7 +89,7 @@ function renderDashboard(avvikList, notifications) {
   <section>
     <h2>Avvik</h2>
     <table>
-      <thead><tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Status</th><th>Sist varslet</th><th></th></tr></thead>
+      <thead><tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Status</th><th>Sist varslet</th><th></th><th>Kommentarer</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </section>
@@ -84,6 +112,20 @@ function renderDashboard(avvikList, notifications) {
     document.getElementById('run-job').addEventListener('click', async () => {
       await fetch('/api/jobs/run-weekly', { method: 'POST' });
       location.reload();
+    });
+    document.querySelectorAll('.add-comment').forEach((form) => {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = form.dataset.id;
+        const author = form.author.value;
+        const text = form.text.value;
+        const res = await fetch('/api/avvik/' + id + '/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ author, text }),
+        });
+        if (res.ok) location.reload();
+      });
     });
   </script>
 </body>
