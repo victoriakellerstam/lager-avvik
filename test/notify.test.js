@@ -65,3 +65,16 @@ test('an unknown discrepancy type still gets generic, numbered instructions', ()
   });
   assert.match(preview.body, /1\. Undersøk avviket/);
 });
+
+test('the email follows the requested shape: order, what the discrepancy is, required action, and who to contact', () => {
+  const preview = buildEmailPreview({
+    orderId: 'SO-99999-12345',
+    purchaserName: 'Kari Nordmann',
+    purchaserEmail: 'kari.nordmann@example.com',
+    discrepancyType: 'Feil antall levert',
+  });
+  assert.match(preview.body, /Avvik på din ordre SO-99999-12345\./);
+  assert.match(preview.body, /Avviket gjelder: Feil antall levert\./);
+  assert.match(preview.body, /Tiltak som kreves fra deg:/);
+  assert.match(preview.body, /kontakt med Finance/);
+});

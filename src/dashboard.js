@@ -56,7 +56,7 @@ function renderDashboard(avvikList, notifications) {
           <summary>${timesNotified} ganger varslet på e-post</summary>
           <ul class="notif-history">${renderNotificationHistory(a.id, notifications)}</ul>
         </details>
-        <button class="preview-email" data-id="${a.id}">Vis e-posteksempel</button>
+        <button type="button" class="preview-email" data-id="${a.id}">Vis e-posteksempel</button>
         <pre class="email-preview" data-id="${a.id}" hidden></pre>
       </td>
     </tr>`;
@@ -154,11 +154,20 @@ function renderDashboard(avvikList, notifications) {
     document.querySelectorAll('.preview-email').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const id = btn.dataset.id;
-        const res = await fetch('/api/avvik/' + id + '/preview-email');
-        const data = await res.json();
         const pre = document.querySelector('.email-preview[data-id="' + id + '"]');
         pre.hidden = false;
-        pre.textContent = 'Til: ' + data.to + '\nEmne: ' + data.subject + '\n\n' + data.body;
+        pre.textContent = 'Laster e-posteksempel...';
+        try {
+          const res = await fetch('/api/avvik/' + id + '/preview-email');
+          if (!res.ok) {
+            pre.textContent = 'Kunne ikke laste e-posteksempel (' + res.status + ').';
+            return;
+          }
+          const data = await res.json();
+          pre.textContent = 'Til: ' + data.to + '\nEmne: ' + data.subject + '\n\n' + data.body;
+        } catch (err) {
+          pre.textContent = 'Kunne ikke laste e-posteksempel: ' + err.message;
+        }
       });
     });
   </script>

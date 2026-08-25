@@ -14,22 +14,26 @@ function needsNotification(avvik, now = new Date()) {
 
 // Builds the email that WOULD be sent. Nothing here ever calls a mail provider.
 function buildEmailPreview(avvik) {
-  const steps = getInstructions(avvik.discrepancyType).map((step, i) => `${i + 1}. ${step}`);
+  const tiltak = getInstructions(avvik.discrepancyType).map((step, i) => `${i + 1}. ${step}`);
 
   return {
     to: avvik.purchaserEmail,
-    subject: `Avvik på ordre ${avvik.orderId} venter på oppfølging`,
+    subject: `Avvik på din ordre ${avvik.orderId}`,
     body: [
       `Hei ${avvik.purchaserName},`,
       '',
-      `Ordre ${avvik.orderId} har et registrert avvik: «${avvik.discrepancyType}».`,
+      `Avvik på din ordre ${avvik.orderId}.`,
       '',
-      'Slik rydder du opp i avviket:',
-      ...steps,
+      `Avviket gjelder: ${avvik.discrepancyType}.`,
+      '',
+      'Tiltak som kreves fra deg:',
+      ...tiltak,
+      '',
+      'Dersom du har spørsmål, ta kontakt med Finance.',
       '',
       'Du mottar denne påminnelsen én gang i uken helt til avviket er markert som løst.',
       '',
-      'Hilsen lager-avvik-varsling (mockup - ingen ekte e-post er sendt)',
+      '(mockup - ingen ekte e-post er sendt)',
     ].join('\n'),
   };
 }

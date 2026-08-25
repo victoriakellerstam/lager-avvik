@@ -9,12 +9,12 @@ send anything real:
 - No email is ever sent. The weekly job only builds an email *preview*
   (subject + body) and logs it, so you can see who would have been emailed
   and what it would have said.
-- The email template (`src/notify.js` + `src/instructions.js`) gives the
-  purchaser concrete, numbered steps for resolving their specific
-  discrepancy type - not just "please look into this." Each avvik row shows
-  how many times it's been notified, the full history of who was notified
-  and when, and a "Vis e-posteksempel" button to preview the exact email
-  for that avvik on demand.
+- The email template (`src/notify.js` + `src/instructions.js`) follows the
+  shape: which order, what the discrepancy is, the numbered actions required
+  from the purchaser, and who to contact with questions (Finance). Each
+  avvik row shows how many times it's been notified, the full history of who
+  was notified and when, and a "Vis e-posteksempel" button to preview the
+  exact email for that avvik on demand.
 - State is in-memory and resets when the process restarts.
 - Each avvik has a comment thread. Comments show who wrote them - there's no
   login, so the commenter types their own name each time.
