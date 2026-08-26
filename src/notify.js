@@ -1,12 +1,16 @@
 'use strict';
 
 const { getInstructions } = require('./instructions');
+const { isFinanceCase } = require('./financeTypes');
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Pure decision logic: kept free of I/O so it is cheap to unit test.
 function needsNotification(avvik, now = new Date()) {
   if (avvik.resolved) return false;
+  // Finance-only cases are never emailed to the purchaser - Finance handles
+  // these internally.
+  if (isFinanceCase(avvik.discrepancyType)) return false;
   if (!avvik.lastNotifiedAt) return true;
   const elapsed = now.getTime() - new Date(avvik.lastNotifiedAt).getTime();
   return elapsed >= ONE_WEEK_MS;

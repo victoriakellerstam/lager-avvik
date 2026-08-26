@@ -32,6 +32,15 @@ test('an avvik notified a week or more ago needs another notification', () => {
   assert.equal(needsNotification(avvik, now), true);
 });
 
+test('a Finance-only case never needs a notification, however overdue', () => {
+  const avvik = {
+    resolved: false,
+    discrepancyType: 'Spesielle caser - Finance',
+    lastNotifiedAt: null,
+  };
+  assert.equal(needsNotification(avvik, new Date()), false);
+});
+
 test('the email preview names the order, the purchaser, and never claims to have sent anything real', () => {
   const preview = buildEmailPreview({
     orderId: 'SO-1',

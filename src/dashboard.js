@@ -1,6 +1,8 @@
 'use strict';
 
 const { getTypeBadgeClass } = require('./typeBadges');
+const { getInstructions } = require('./instructions');
+const { isFinanceCase } = require('./financeTypes');
 
 function escapeHtml(value) {
   return String(value)
@@ -54,11 +56,11 @@ function renderStats(avvikList) {
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
       <div class="stat-number">${open}</div>
-      <div class="stat-label">Åpne</div>
+      <div class="stat-label">Antall åpne avvik</div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
       <div class="stat-number">${resolved}</div>
-      <div class="stat-label">Løste</div>
+      <div class="stat-label">Antall løst</div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
       <div class="stat-label">Flest avvik (totalt)</div>
@@ -115,14 +117,15 @@ function renderTypeDonut(avvikList) {
     </div></div>`;
 }
 
-function renderAvvikRow(a, notifications, includeResolveColumn) {
+function renderAvvikRow(a, notifications, { includeResolveColumn, dateField }) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
+  const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml(a.purchaserName.toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${escapeHtml(a.purchaserName)}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
-      <td>${a.lastNotifiedAt ? new Date(a.lastNotifiedAt).toLocaleDateString('no-NO') : '—'}</td>
+      <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
       ${includeResolveColumn ? `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button></td>` : ''}
       <td>
         <details>
@@ -146,12 +149,44 @@ function renderAvvikRow(a, notifications, includeResolveColumn) {
     </tr>`;
 }
 
-function renderDashboard(avvikList, notifications) {
-  const open = avvikList.filter((a) => !a.resolved);
-  const resolved = avvikList.filter((a) => a.resolved);
+// Finance-only cases never get an email, so this row shows a resolution
+// procedure (the same instruction steps that would otherwise go in an
+// email) instead of any email-preview UI.
+function renderFinanceRow(a) {
+  const steps = getInstructions(a.discrepancyType);
+  const procedure = steps.length
+    ? `<ol class="procedure-list">${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>`
+    : '—';
+  return `
+    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml(a.purchaserName.toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+      <td>${escapeHtml(a.orderId)}</td>
+      <td>${escapeHtml(a.purchaserName)}</td>
+      <td>${a.resolved ? '<span class="bf-badge bfc-success-bg">Løst</span>' : '<span class="bf-badge bfc-attn-bg">Åpen</span>'}</td>
+      <td>${procedure}</td>
+      <td>
+        <details>
+          <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
+          <ul class="comments">${renderComments(a.comments)}</ul>
+          <form class="add-comment" data-id="${a.id}">
+            <input type="text" class="bf-input" name="author" placeholder="Ditt navn" required maxlength="100">
+            <input type="text" class="bf-input" name="text" placeholder="Skriv en kommentar" required maxlength="2000">
+            <button type="submit" class="bf-button bf-button-small">Legg til</button>
+          </form>
+        </details>
+      </td>
+      <td>${a.resolved ? '' : `<button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button>`}</td>
+    </tr>`;
+}
 
-  const openRows = open.map((a) => renderAvvikRow(a, notifications, true)).join('');
-  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, false)).join('');
+function renderDashboard(avvikList, notifications) {
+  const financeCases = avvikList.filter((a) => isFinanceCase(a.discrepancyType));
+  const rest = avvikList.filter((a) => !isFinanceCase(a.discrepancyType));
+  const open = rest.filter((a) => !a.resolved);
+  const resolved = rest.filter((a) => a.resolved);
+
+  const openRows = open.map((a) => renderAvvikRow(a, notifications, { includeResolveColumn: true, dateField: 'lastNotifiedAt' })).join('');
+  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { includeResolveColumn: false, dateField: 'resolvedAt' })).join('');
+  const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
 
   return `<!DOCTYPE html>
 <html lang="no" data-bf-color-mode="dark">
@@ -171,6 +206,9 @@ function renderDashboard(avvikList, notifications) {
   section { margin-top: var(--bfs48); }
   .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
   .section-header h2 { margin: 0; }
+  .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
+  .procedure-list { margin: 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); }
+  .procedure-list li { padding: var(--bfs2) 0; }
   .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
   .section-card .bf-table { margin: 0; }
   details.archive { margin-top: var(--bfs48); }
@@ -241,12 +279,28 @@ function renderDashboard(avvikList, notifications) {
       </div>
     </section>
 
+    <section>
+      <div class="section-header">
+        <h2>Spesielle caser - Finance</h2>
+        <span class="bf-badge bfc-theme-bg">${financeCases.length}</span>
+      </div>
+      <p class="section-note">Disse håndteres av Finance internt - innkjøper varsles aldri på e-post om dem.</p>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Status</th><th>Fremgangsmåte</th><th>Kommentarer</th><th></th></tr>
+          </thead>
+          <tbody>${financeRows}</tbody>
+        </table>
+      </div>
+    </section>
+
     <details class="archive">
       <summary class="bf-link">Arkiv — løste avvik (${resolved.length})</summary>
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Sist varslet</th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Løst</th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
           </thead>
           <tbody>${resolvedRows}</tbody>
         </table>
