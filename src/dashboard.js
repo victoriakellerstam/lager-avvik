@@ -202,7 +202,10 @@ function renderDashboard(avvikList, notifications) {
   .page-header { margin-bottom: var(--bfs32); }
   .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
   .page-header p { margin: 0; max-width: 46rem; color: var(--bfc-base-c-dimmed); }
-  .toolbar { margin-top: var(--bfs16); }
+  .toolbar { margin-top: var(--bfs16); display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
+  .test-dwh-result { font-size: var(--bf-font-size-s); }
+  .test-dwh-result.ok { color: var(--bfc-success); }
+  .test-dwh-result.fail { color: var(--bfc-alert); }
   section { margin-top: var(--bfs48); }
   .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
   .section-header h2 { margin: 0; }
@@ -250,6 +253,8 @@ function renderDashboard(avvikList, notifications) {
         ingenting sendes ut på ekte i denne mockupen.</p>
       <div class="toolbar">
         <button type="button" id="run-job" class="bf-button bf-button-filled">Kjør ukentlig jobb nå (demo)</button>
+        <button type="button" id="test-dwh" class="bf-button">Test tilkobling til dwh</button>
+        <span id="test-dwh-result" class="test-dwh-result"></span>
       </div>
     </header>
 
@@ -318,6 +323,25 @@ function renderDashboard(avvikList, notifications) {
     document.getElementById('run-job').addEventListener('click', async () => {
       await fetch('/api/jobs/run-weekly', { method: 'POST' });
       location.reload();
+    });
+    document.getElementById('test-dwh').addEventListener('click', async () => {
+      const out = document.getElementById('test-dwh-result');
+      out.textContent = 'Kobler til...';
+      out.className = 'test-dwh-result';
+      try {
+        const res = await fetch('/api/dwh/test-connection', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          out.textContent = 'Tilkobling til dwh OK.';
+          out.className = 'test-dwh-result ok';
+        } else {
+          out.textContent = 'Feilet: ' + (data.error || res.status);
+          out.className = 'test-dwh-result fail';
+        }
+      } catch (err) {
+        out.textContent = 'Feilet: ' + err.message;
+        out.className = 'test-dwh-result fail';
+      }
     });
     document.querySelectorAll('.add-comment').forEach((form) => {
       form.addEventListener('submit', async (e) => {

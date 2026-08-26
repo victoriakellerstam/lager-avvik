@@ -7,8 +7,12 @@ gets a single weekly email about their discrepancy and does as little as
 possible; if they reply or otherwise flag something, that becomes a comment
 on the avvik here. It exists to show the concept, not to send anything real:
 
-- All data is seeded test data (`src/mockData.js`). Nothing here reads from
-  `dwh` or `aa-x-s-14`.
+- All avvik data is still seeded test data (`src/mockData.js`) - nothing here
+  reads real avvik from `dwh` yet. A Minato Link named `dwh` is attached
+  (`local_port: 1433`), and `src/dwh.js` can open a real SQL Server
+  connection through it (`POST /api/dwh/test-connection`, with a matching
+  "Test tilkobling til dwh" button on the dashboard) to prove connectivity
+  end to end. It runs `SELECT 1` and nothing else - no real avvik query yet.
 - No email is ever sent. The weekly job only builds an email *preview*
   (subject + body) and logs it, so you can see who would have been emailed
   and what it would have said.
@@ -56,6 +60,12 @@ npm install
 npm start
 ```
 
+There is no committed `package-lock.json` right now: this repo was built on a
+machine with no Node/npm available, so the lockfile for the `mssql` dependency
+couldn't be generated and verified locally. `npm install` resolves it fresh.
+Regenerate and commit a real lockfile (`npm install` then commit the result)
+the next time someone with Node touches this repo.
+
 Then open `http://localhost:8080`. The dashboard lists the mock avvik, lets
 you mark one resolved, and has a "run weekly job now" button so you don't
 have to wait a week to see the notification logic fire.
@@ -83,17 +93,19 @@ twice back to back). No database or network access is needed to run them.
 | `POST` | `/api/jobs/run-weekly` | Manually trigger the weekly check (demo only). |
 | `POST` | `/api/avvik/:id/comments` | Add a comment (`{"author": "...", "text": "..."}`). |
 | `GET` | `/api/avvik/:id/preview-email` | Render the exact email template for one avvik, regardless of whether it's currently due. |
+| `POST` | `/api/dwh/test-connection` | Open a real connection to `dwh` through the Minato Link and run `SELECT 1`. |
 
 ## What's deliberately not here yet
 
 This is step one. Turning it into the real thing needs decisions and platform
 setup that are out of scope for a mockup:
 
-- **Real data from `dwh` and `aa-x-s-14`.** These are internal servers, so the
-  app can't reach them by default. A tenant admin needs to install a
-  [Minato Link](https://intility.github.io/minato/) agent on a server that can
-  reach them, then the app attaches to that link. This also means deciding
-  exactly which tables/views hold the avvik data and the purchaser's email.
+- **Real avvik data from `dwh`.** The network path now exists (Minato Link
+  `dwh`, connectivity verified), but the app still doesn't query real avvik -
+  we haven't decided which table/view holds the avvik data, which columns
+  map to purchaser name/email, or how "Spesielle caser - Finance" is
+  identified in that data.
+- **`aa-x-s-14`.** No link exists for this server yet.
 - **Real email sending.** Not decided yet — options are Microsoft Graph /
   Exchange Online, an internal SMTP relay (needs a Link, since SMTP isn't port
   443), or a third-party API like SendGrid (needs an egress rule + API key
@@ -112,5 +124,10 @@ setup that are out of scope for a mockup:
 ## Environment
 
 - `PORT` — port to listen on (defaults to `8080`; Minato sets this).
-
-No secrets or non-secret environment values are required for this mockup.
+- `MINATO_LINK_DWH_ADDR` — injected by the attached `dwh` Minato Link
+  (`host:port`, currently `127.0.0.1:1433`). Never hardcode this value; read
+  it at runtime, since it's only guaranteed for as long as the link stays
+  attached this way.
+- `DWH_USER` — SQL Server username for `dwh` (non-secret, set via `minato_deploy`/`minato_set_app` `env`).
+- `DWH_DATABASE` — database name on `dwh` (non-secret, same as above).
+- `LAGER_AVVIK` (secret) — the `DWH_USER` password. Pinned via `minato_set_app.secrets`; never passed through MCP as a value.

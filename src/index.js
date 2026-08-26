@@ -4,6 +4,7 @@ const http = require('node:http');
 const store = require('./store');
 const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
+const { testConnection } = require('./dwh');
 const { startScheduler } = require('./scheduler');
 const { renderDashboard } = require('./dashboard');
 
@@ -103,6 +104,15 @@ function createServer() {
         const comment = store.addComment(Number(commentMatch[1]), author, text);
         if (!comment) return sendJson(res, 404, { error: 'avvik not found' });
         return sendJson(res, 201, comment);
+      }
+
+      if (req.method === 'POST' && pathname === '/api/dwh/test-connection') {
+        try {
+          const result = await testConnection();
+          return sendJson(res, 200, result);
+        } catch (err) {
+          return sendJson(res, 502, { ok: false, error: err.message });
+        }
       }
 
       if (req.method === 'POST' && pathname === '/api/jobs/run-weekly') {
