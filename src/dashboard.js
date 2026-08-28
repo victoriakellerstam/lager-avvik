@@ -44,7 +44,7 @@ function renderStats(avvikList) {
 
   const topList = top3.length
     ? top3
-        .map(([name, count]) => `<li>${escapeHtml(name)} — ${count} avvik</li>`)
+        .map(([name, count]) => `<li>${escapeHtml(name || 'Ukjent')} — ${count} avvik</li>`)
         .join('')
     : '<li class="empty">Ingen avvik registrert.</li>';
 
@@ -121,9 +121,9 @@ function renderAvvikRow(a, notifications, { includeResolveColumn, dateField }) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
   const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
   return `
-    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml(a.purchaserName.toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
-      <td>${escapeHtml(a.purchaserName)}</td>
+      <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
       ${includeResolveColumn ? `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button></td>` : ''}
@@ -158,9 +158,9 @@ function renderFinanceRow(a) {
     ? `<ol class="procedure-list">${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>`
     : '—';
   return `
-    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml(a.purchaserName.toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
-      <td>${escapeHtml(a.purchaserName)}</td>
+      <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.resolved ? '<span class="bf-badge bfc-success-bg">Løst</span>' : '<span class="bf-badge bfc-attn-bg">Åpen</span>'}</td>
       <td>${procedure}</td>
       <td>

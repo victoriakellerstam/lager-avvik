@@ -68,8 +68,12 @@ function createServer() {
       }
 
       if (req.method === 'GET' && pathname === '/') {
+        // Render before writing headers - if rendering throws, the outer
+        // catch below needs to still be able to send a fresh error response
+        // instead of hitting ERR_HTTP_HEADERS_SENT on an already-started one.
+        const html = renderDashboard(store.listAvvik(), store.listNotifications());
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(renderDashboard(store.listAvvik(), store.listNotifications()));
+        return res.end(html);
       }
 
       if (req.method === 'GET' && pathname === '/api/avvik') {
