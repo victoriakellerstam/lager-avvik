@@ -87,6 +87,13 @@ function createServer() {
         return sendJson(res, 200, updated);
       }
 
+      const reopenMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/reopen$/);
+      if (req.method === 'POST' && reopenMatch) {
+        const updated = store.reopenAvvik(parseAvvikId(reopenMatch[1]));
+        if (!updated) return sendJson(res, 404, { error: 'avvik not found' });
+        return sendJson(res, 200, updated);
+      }
+
       if (req.method === 'GET' && pathname === '/api/notifications') {
         return sendJson(res, 200, store.listNotifications());
       }

@@ -117,16 +117,22 @@ function renderTypeDonut(avvikList) {
     </div></div>`;
 }
 
-function renderAvvikRow(a, notifications, { includeResolveColumn, dateField }) {
+function renderAvvikRow(a, notifications, { actionButton, dateField }) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
   const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
+  let actionCell = '';
+  if (actionButton === 'resolve') {
+    actionCell = `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button></td>`;
+  } else if (actionButton === 'reopen') {
+    actionCell = `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small reopen">Gjenåpne</button></td>`;
+  }
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
-      ${includeResolveColumn ? `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button></td>` : ''}
+      ${actionCell}
       <td>
         <details>
           <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
@@ -184,8 +190,8 @@ function renderDashboard(avvikList, notifications) {
   const open = rest.filter((a) => !a.resolved);
   const resolved = rest.filter((a) => a.resolved);
 
-  const openRows = open.map((a) => renderAvvikRow(a, notifications, { includeResolveColumn: true, dateField: 'lastNotifiedAt' })).join('');
-  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { includeResolveColumn: false, dateField: 'resolvedAt' })).join('');
+  const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
+  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
   const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
 
   return `<!DOCTYPE html>
@@ -307,7 +313,16 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Løst</th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
           </thead>
           <tbody>${resolvedRows}</tbody>
         </table>
@@ -319,6 +334,12 @@ function renderDashboard(avvikList, notifications) {
     document.querySelectorAll('.resolve').forEach((btn) => {
       btn.addEventListener('click', async () => {
         await fetch('/api/avvik/' + btn.dataset.id + '/resolve', { method: 'POST' });
+        location.reload();
+      });
+    });
+    document.querySelectorAll('.reopen').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        await fetch('/api/avvik/' + btn.dataset.id + '/reopen', { method: 'POST' });
         location.reload();
       });
     });
@@ -404,21 +425,26 @@ function renderDashboard(avvikList, notifications) {
         }
       });
     });
-    const filterInputs = document.querySelectorAll('.filter-input');
-    function applyFilters() {
-      const filters = {};
+    // Each section (open avvik, archive) has its own filter row - scoped
+    // per-section so the two "Filtrer innkjøper..." boxes don't clobber
+    // each other's filters.
+    document.querySelectorAll('#open-section, details.archive').forEach((section) => {
+      const filterInputs = section.querySelectorAll('.filter-input');
+      function applyFilters() {
+        const filters = {};
+        filterInputs.forEach((el) => {
+          const value = el.value.trim().toLowerCase();
+          if (value) filters[el.dataset.col] = value;
+        });
+        section.querySelectorAll('.avvik-row').forEach((row) => {
+          const match = Object.keys(filters).every((col) => row.dataset[col].includes(filters[col]));
+          row.hidden = !match;
+        });
+      }
       filterInputs.forEach((el) => {
-        const value = el.value.trim().toLowerCase();
-        if (value) filters[el.dataset.col] = value;
+        el.addEventListener('input', applyFilters);
+        el.addEventListener('change', applyFilters);
       });
-      document.querySelectorAll('#open-section .avvik-row').forEach((row) => {
-        const match = Object.keys(filters).every((col) => row.dataset[col].includes(filters[col]));
-        row.hidden = !match;
-      });
-    }
-    filterInputs.forEach((el) => {
-      el.addEventListener('input', applyFilters);
-      el.addEventListener('change', applyFilters);
     });
   </script>
 </body>

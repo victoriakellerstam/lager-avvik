@@ -27,6 +27,15 @@ function resolveAvvik(id) {
   return avvik;
 }
 
+// Undo for an avvik resolved by mistake - moves it back to the open list.
+function reopenAvvik(id) {
+  const avvik = getAvvik(id);
+  if (!avvik) return null;
+  avvik.resolved = false;
+  avvik.resolvedAt = null;
+  return avvik;
+}
+
 function recordNotification(avvik, preview, now) {
   avvik.lastNotifiedAt = now.toISOString();
   const entry = {
@@ -127,6 +136,7 @@ module.exports = {
   listAvvik,
   getAvvik,
   resolveAvvik,
+  reopenAvvik,
   recordNotification,
   listNotifications,
   addComment,
