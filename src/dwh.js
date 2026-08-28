@@ -2,8 +2,7 @@
 
 const sql = require('mssql');
 
-// Connectivity check only - this does not read or expose any real avvik
-// data yet. The address comes from the Minato Link's injected env var, never
+// The address comes from the Minato Link's injected env var, never
 // hardcoded, since the local port/host are only stable for as long as the
 // link stays attached this way.
 function getConfig() {
@@ -30,8 +29,11 @@ function getConfig() {
       encrypt: true,
       trustServerCertificate: true,
     },
-    connectionTimeout: 5000,
-    requestTimeout: 5000,
+    connectionTimeout: 10000,
+    // 5s was fine for testConnection's trivial SELECT 1, but dwhQueries.js's
+    // real fetches (the main order-line union, a year-plus of medius_invoice_head,
+    // etc.) run against production data and legitimately take longer.
+    requestTimeout: 60000,
   };
 }
 
