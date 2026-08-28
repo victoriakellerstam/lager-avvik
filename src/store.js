@@ -58,6 +58,61 @@ function addComment(id, author, text) {
   return comment;
 }
 
+// Reconciles a fresh batch of dwh-derived avvik (see src/avvikSync.js) into
+// the existing in-memory list, keyed by each row's synthetic `id`. This is
+// the only place dwh data ever touches the store, and it deliberately never
+// deletes anything - a row missing from a fresh fetch could mean it was
+// genuinely resolved upstream, or could mean a sync hiccup, and this app has
+// no undo, so disappearance is treated as suspect rather than authoritative:
+//   - id in both: overwrite the dwh-derived fields, but never touch
+//     `resolved`/`resolvedAt`/`lastNotifiedAt`/`comments` - those are owned
+//     entirely by the warehouse team, not dwh.
+//   - id only in the fresh batch: inserted as a brand-new avvik.
+//   - id only in the existing list (missing from the fresh batch): if it was
+//     still open, it's left in place untouched but stamped with
+//     `missingFromLastSyncAt` (only on the *first* sync where it goes
+//     missing, so the field reads as "missing since", not "last checked and
+//     still missing"); cleared again if it reappears. If it was already
+//     resolved, it's left alone entirely - expected to age out over time.
+function mergeFromDwh(freshAvvikRows, now = new Date()) {
+  const freshById = new Map(freshAvvikRows.map((a) => [a.id, a]));
+  const nowIso = now.toISOString();
+  let updated = 0;
+  let markedMissing = 0;
+
+  for (const existing of avvikList) {
+    const fresh = freshById.get(existing.id);
+    if (fresh) {
+      existing.orderId = fresh.orderId;
+      existing.purchaserName = fresh.purchaserName;
+      existing.purchaserEmail = fresh.purchaserEmail;
+      existing.discrepancyType = fresh.discrepancyType;
+      existing.createdAt = fresh.createdAt;
+      existing.missingFromLastSyncAt = null;
+      updated += 1;
+      freshById.delete(existing.id); // consumed; anything left over is new
+    } else if (!existing.resolved && !existing.missingFromLastSyncAt) {
+      existing.missingFromLastSyncAt = nowIso;
+      markedMissing += 1;
+    }
+  }
+
+  let inserted = 0;
+  for (const fresh of freshById.values()) {
+    avvikList.push({
+      ...fresh,
+      resolved: false,
+      resolvedAt: null,
+      lastNotifiedAt: null,
+      comments: [],
+      missingFromLastSyncAt: null,
+    });
+    inserted += 1;
+  }
+
+  return { updated, inserted, markedMissing };
+}
+
 // Test-only helper to reset state between test files.
 function _reset() {
   avvikList = SEED_AVVIK.map((a) => ({ ...a, comments: (a.comments || []).map((c) => ({ ...c })) }));
@@ -72,5 +127,6 @@ module.exports = {
   recordNotification,
   listNotifications,
   addComment,
+  mergeFromDwh,
   _reset,
 };
