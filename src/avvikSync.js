@@ -122,17 +122,18 @@ function isOverThreeWeeks(earliestMovement, now) {
  *   that's mergeFromDwh's job to preserve across a refresh.
  */
 async function syncAvvikFromDwh(now = new Date()) {
-  const [orderLines, invoiceHead, invoiceLines, connections, stockHistory, tickets, supplierOrders, intilityUsers] =
-    await Promise.all([
-      dwhQueries.fetchOrderLines(),
-      dwhQueries.fetchMediusInvoiceHead(),
-      dwhQueries.fetchMediusInvoiceLines(),
-      dwhQueries.fetchMediusOrderConnections(),
-      dwhQueries.fetchStockHistory(),
-      dwhQueries.fetchTickets(),
-      dwhQueries.fetchSupplierOrders(),
-      dwhQueries.fetchIntilityUsers(),
-    ]);
+  // Fetched one at a time rather than via Promise.all: the app's container
+  // has a modest memory budget, and 8 simultaneous open connections/result
+  // buffers against production data is a much bigger transient spike than
+  // running them one after another (each pool closes before the next opens).
+  const orderLines = await dwhQueries.fetchOrderLines();
+  const invoiceHead = await dwhQueries.fetchMediusInvoiceHead();
+  const invoiceLines = await dwhQueries.fetchMediusInvoiceLines();
+  const connections = await dwhQueries.fetchMediusOrderConnections();
+  const stockHistory = await dwhQueries.fetchStockHistory();
+  const tickets = await dwhQueries.fetchTickets();
+  const supplierOrders = await dwhQueries.fetchSupplierOrders();
+  const intilityUsers = await dwhQueries.fetchIntilityUsers();
 
   const scenarioIndexes = buildScenarioIndexes({ invoiceHead, invoiceLines, connections });
   const purchaserIndexes = buildPurchaserIndexes({ tickets, supplierOrders, intilityUsers });
