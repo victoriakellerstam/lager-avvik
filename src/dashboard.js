@@ -255,6 +255,8 @@ function renderDashboard(avvikList, notifications) {
         <button type="button" id="run-job" class="bf-button bf-button-filled">Kjør ukentlig jobb nå (demo)</button>
         <button type="button" id="test-dwh" class="bf-button">Test tilkobling til dwh</button>
         <span id="test-dwh-result" class="test-dwh-result"></span>
+        <button type="button" id="refresh-dwh" class="bf-button">Oppdater fra dwh</button>
+        <span id="refresh-dwh-result" class="test-dwh-result"></span>
       </div>
     </header>
 
@@ -334,6 +336,26 @@ function renderDashboard(avvikList, notifications) {
         if (res.ok && data.ok) {
           out.textContent = 'Tilkobling til dwh OK.';
           out.className = 'test-dwh-result ok';
+        } else {
+          out.textContent = 'Feilet: ' + (data.error || res.status);
+          out.className = 'test-dwh-result fail';
+        }
+      } catch (err) {
+        out.textContent = 'Feilet: ' + err.message;
+        out.className = 'test-dwh-result fail';
+      }
+    });
+    document.getElementById('refresh-dwh').addEventListener('click', async () => {
+      const out = document.getElementById('refresh-dwh-result');
+      out.textContent = 'Oppdaterer...';
+      out.className = 'test-dwh-result';
+      try {
+        const res = await fetch('/api/dwh/refresh-avvik', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          out.textContent = data.updated + ' oppdatert, ' + data.inserted + ' nye, ' + data.markedMissing + ' savnet.';
+          out.className = 'test-dwh-result ok';
+          location.reload();
         } else {
           out.textContent = 'Feilet: ' + (data.error || res.status);
           out.className = 'test-dwh-result fail';

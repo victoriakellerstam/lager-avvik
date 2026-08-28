@@ -45,4 +45,4 @@ async function testConnection() {
   }
 }
 
-module.exports = { testConnection };
+module.exports = { testConnection, getConfig };
