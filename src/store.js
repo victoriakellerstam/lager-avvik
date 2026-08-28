@@ -2,9 +2,12 @@
 
 const { SEED_AVVIK } = require('./mockData');
 
-// In-memory only: this mockup has no real database wired up yet. State resets
-// on restart. See README for what a persistent version would need.
-let avvikList = SEED_AVVIK.map((a) => ({ ...a, comments: (a.comments || []).map((c) => ({ ...c })) }));
+// In-memory only: this app has no persistent database wired up yet. State
+// resets on restart, and the real avvik feed comes from the dwh startup sync
+// in index.js (see avvikSync.js) - SEED_AVVIK is fixture data for tests only
+// (via _reset()), not loaded here, so production never mixes mock rows into
+// the real feed.
+let avvikList = [];
 let notifications = [];
 let nextNotificationId = 1;
 

@@ -245,7 +245,7 @@ function renderDashboard(avvikList, notifications) {
 <body>
   <div class="page">
     <header class="page-header">
-      <span class="bf-badge bfc-attn-bg">Mockup — kun for lageravdelingen</span>
+      <span class="bf-badge bfc-attn-bg">Under arbeid</span>
       <h1>Lager-avvik</h1>
       <p>Denne siden er for oss som rydder opp i avvik - innkjøperne ser den ikke.
         De får kun en e-post om avviket sitt; svarer de på den, eller gir beskjed på annen måte,
