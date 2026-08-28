@@ -12,7 +12,18 @@ const MEDIUS_INVOICE_HEAD_CUTOFF_DATE = '2025-01-01';
 const TICKETS_CUTOFF_DATE = '2026-01-01';
 
 async function withPool(run) {
-  const pool = await sql.connect(getConfig());
+  // A dedicated ConnectionPool instance, not the module-level sql.connect()/
+  // sql.close() global singleton - this function is called many times per
+  // refresh, and repeatedly opening/closing the shared global pool is exactly
+  // the anti-pattern node-mssql's own docs warn against. The pool is also an
+  // EventEmitter: without an 'error' listener, an async connection error (e.g.
+  // a network hiccup on the Link) throws unhandled and crashes the whole
+  // process, not just this one request - this is what a real refresh hit.
+  const pool = new sql.ConnectionPool(getConfig());
+  pool.on('error', (err) => {
+    console.warn(`dwh connection pool error: ${err.message}`);
+  });
+  await pool.connect();
   try {
     return await run(pool);
   } finally {

@@ -38,7 +38,14 @@ function getConfig() {
 }
 
 async function testConnection() {
-  const pool = await sql.connect(getConfig());
+  // A dedicated pool, not the sql.connect()/sql.close() global singleton -
+  // see dwhQueries.js's withPool for why. Also needs its own 'error' listener
+  // so an async connection error can't crash the whole process.
+  const pool = new sql.ConnectionPool(getConfig());
+  pool.on('error', (err) => {
+    console.warn(`dwh connection pool error: ${err.message}`);
+  });
+  await pool.connect();
   try {
     const result = await pool.request().query('SELECT 1 AS ok');
     return { ok: true, recordset: result.recordset };
