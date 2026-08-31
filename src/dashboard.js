@@ -1,7 +1,6 @@
 'use strict';
 
 const { getTypeBadgeClass } = require('./typeBadges');
-const { getInstructions } = require('./instructions');
 const { isFinanceCase } = require('./financeTypes');
 
 function escapeHtml(value) {
@@ -168,20 +167,13 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
     </tr>`;
 }
 
-// Finance-only cases never get an email, so this row shows a resolution
-// procedure (the same instruction steps that would otherwise go in an
-// email) instead of any email-preview UI.
+// Finance-only cases never get an email, so there's no email-preview UI here.
 function renderFinanceRow(a) {
-  const steps = getInstructions(a.discrepancyType);
-  const procedure = steps.length
-    ? `<ol class="procedure-list">${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>`
-    : '—';
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.resolved ? '<span class="bf-badge bfc-success-bg">Løst</span>' : '<span class="bf-badge bfc-attn-bg">Åpen</span>'}</td>
-      <td>${procedure}</td>
       <td>
         <details>
           <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
@@ -240,8 +232,6 @@ function renderDashboard(avvikList, notifications) {
   .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
   .section-header h2 { margin: 0; }
   .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
-  .procedure-list { margin: 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); }
-  .procedure-list li { padding: var(--bfs2) 0; }
   .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
   .section-card .bf-table { margin: 0; }
   details.archive { margin-top: var(--bfs48); }
@@ -347,11 +337,11 @@ function renderDashboard(avvikList, notifications) {
         <h2>Spesielle caser - Finance</h2>
         <span class="bf-badge bfc-theme-bg">${financeCases.length}</span>
       </div>
-      <p class="section-note">Disse håndteres av Finance internt - innkjøper varsles aldri på e-post om dem.</p>
+      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det.</p>
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Status</th><th>Fremgangsmåte</th><th>Kommentarer</th><th></th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Status</th><th>Kommentarer</th><th></th></tr>
           </thead>
           <tbody>${financeRows}</tbody>
         </table>
