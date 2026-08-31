@@ -108,3 +108,24 @@ test('mergeFromDwh: an avvik that was flagged missing clears the flag if it reap
 
   assert.equal(store.getAvvik(existing.id).missingFromLastSyncAt, null);
 });
+
+test('mergeFromDwh: a manually-corrected purchaser survives a later refresh, everything else still updates', () => {
+  const [existing] = store.listAvvik();
+  store.setManualPurchaser(existing.id, 'Manuelt Rettet Navn', 'manuelt@intility.no');
+
+  store.mergeFromDwh([
+    freshRow({
+      id: existing.id,
+      orderId: 'OPPDATERT-ORDRE',
+      purchaserName: 'Sakseier ikke funnet',
+      purchaserEmail: null,
+      discrepancyType: 'Kostnadsfaktura — reverser',
+    }),
+  ]);
+
+  const merged = store.getAvvik(existing.id);
+  assert.equal(merged.purchaserName, 'Manuelt Rettet Navn');
+  assert.equal(merged.purchaserEmail, 'manuelt@intility.no');
+  assert.equal(merged.orderId, 'OPPDATERT-ORDRE', 'non-purchaser fields still refresh from dwh as normal');
+  assert.equal(merged.discrepancyType, 'Kostnadsfaktura — reverser');
+});

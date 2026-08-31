@@ -36,6 +36,20 @@ function reopenAvvik(id) {
   return avvik;
 }
 
+// Manual correction for an avvik whose dwh-resolved case_owner came back as
+// "Sakseier ikke funnet" / "Manuell ordre – sakseier mangler" (see
+// dashboard.js's NO_OWNER_NAMES). Sets purchaserManuallySet so a later
+// mergeFromDwh doesn't overwrite this correction with dwh's answer again -
+// once someone's identified the real owner, that sticks.
+function setManualPurchaser(id, name, email) {
+  const avvik = getAvvik(id);
+  if (!avvik) return null;
+  avvik.purchaserName = name;
+  avvik.purchaserEmail = email || null;
+  avvik.purchaserManuallySet = true;
+  return avvik;
+}
+
 function recordNotification(avvik, preview, now) {
   avvik.lastNotifiedAt = now.toISOString();
   const entry = {
@@ -78,7 +92,9 @@ function addComment(id, author, text) {
 // no undo, so disappearance is treated as suspect rather than authoritative:
 //   - id in both: overwrite the dwh-derived fields, but never touch
 //     `resolved`/`resolvedAt`/`lastNotifiedAt`/`comments` - those are owned
-//     entirely by the warehouse team, not dwh.
+//     entirely by the warehouse team, not dwh. Same for purchaserName/
+//     purchaserEmail once purchaserManuallySet is true (see
+//     setManualPurchaser) - a human's correction outranks dwh's answer.
 //   - id only in the fresh batch: inserted as a brand-new avvik.
 //   - id only in the existing list (missing from the fresh batch): if it was
 //     still open, it's left in place untouched but stamped with
@@ -96,8 +112,10 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
     const fresh = freshById.get(existing.id);
     if (fresh) {
       existing.orderId = fresh.orderId;
-      existing.purchaserName = fresh.purchaserName;
-      existing.purchaserEmail = fresh.purchaserEmail;
+      if (!existing.purchaserManuallySet) {
+        existing.purchaserName = fresh.purchaserName;
+        existing.purchaserEmail = fresh.purchaserEmail;
+      }
       existing.discrepancyType = fresh.discrepancyType;
       existing.createdAt = fresh.createdAt;
       existing.missingFromLastSyncAt = null;
@@ -118,6 +136,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       lastNotifiedAt: null,
       comments: [],
       missingFromLastSyncAt: null,
+      purchaserManuallySet: false,
     });
     inserted += 1;
   }
@@ -137,6 +156,7 @@ module.exports = {
   getAvvik,
   resolveAvvik,
   reopenAvvik,
+  setManualPurchaser,
   recordNotification,
   listNotifications,
   addComment,

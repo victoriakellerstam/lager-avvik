@@ -117,7 +117,7 @@ function renderTypeDonut(avvikList) {
     </div></div>`;
 }
 
-function renderAvvikRow(a, notifications, { actionButton, dateField }) {
+function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchaserForm }) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
   const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
   let actionCell = '';
@@ -126,10 +126,22 @@ function renderAvvikRow(a, notifications, { actionButton, dateField }) {
   } else if (actionButton === 'reopen') {
     actionCell = `<td><button type="button" data-id="${a.id}" class="bf-button bf-button-small reopen">Gjenåpne</button></td>`;
   }
+  // A manually-entered owner takes the row out of the "Sakseier ikke funnet"
+  // table on next reload (see dashboard.js's NO_OWNER_NAMES check), so the
+  // form is only ever shown while no real owner has been resolved yet.
+  const purchaserCell = showPurchaserForm
+    ? `<form class="set-purchaser" data-id="${a.id}">
+        <input type="text" class="bf-input bf-input-small" name="name" placeholder="Innkjøpers navn" required maxlength="100">
+        <input type="email" class="bf-input bf-input-small" name="email" placeholder="E-post (valgfritt)" maxlength="200">
+        <button type="submit" class="bf-button bf-button-small">Lagre</button>
+      </form>`
+    : a.purchaserName
+      ? escapeHtml(a.purchaserName)
+      : '—';
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
-      <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
+      <td>${purchaserCell}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
       ${actionCell}
@@ -200,7 +212,7 @@ function renderDashboard(avvikList, notifications) {
   const resolved = rest.filter((a) => a.resolved);
 
   const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
-  const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
+  const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt', showPurchaserForm: true })).join('');
   const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
   const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
 
@@ -240,6 +252,8 @@ function renderDashboard(avvikList, notifications) {
   ul.comments .ts { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
   form.add-comment { margin-top: var(--bfs8); display: flex; gap: var(--bfs8); flex-wrap: wrap; }
   form.add-comment .bf-input { width: auto; }
+  form.set-purchaser { display: flex; gap: var(--bfs8); flex-wrap: wrap; }
+  form.set-purchaser .bf-input { width: auto; min-width: 8rem; }
   .preview-email { margin-top: var(--bfs8); }
   .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
   .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
@@ -431,6 +445,20 @@ function renderDashboard(avvikList, notifications) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ author, text }),
+        });
+        if (res.ok) location.reload();
+      });
+    });
+    document.querySelectorAll('.set-purchaser').forEach((form) => {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = form.dataset.id;
+        const name = form.name.value;
+        const email = form.email.value;
+        const res = await fetch('/api/avvik/' + id + '/purchaser', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email }),
         });
         if (res.ok) location.reload();
       });

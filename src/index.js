@@ -94,6 +94,25 @@ function createServer() {
         return sendJson(res, 200, updated);
       }
 
+      const purchaserMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/purchaser$/);
+      if (req.method === 'POST' && purchaserMatch) {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          return sendJson(res, err.status || 400, { error: err.message });
+        }
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        const email = typeof body.email === 'string' ? body.email.trim() : '';
+        if (!name) return sendJson(res, 400, { error: 'name is required' });
+        if (name.length > 100 || email.length > 200) {
+          return sendJson(res, 400, { error: 'name or email is too long' });
+        }
+        const updated = store.setManualPurchaser(parseAvvikId(purchaserMatch[1]), name, email);
+        if (!updated) return sendJson(res, 404, { error: 'avvik not found' });
+        return sendJson(res, 200, updated);
+      }
+
       if (req.method === 'GET' && pathname === '/api/notifications') {
         return sendJson(res, 200, store.listNotifications());
       }
