@@ -184,13 +184,23 @@ function renderFinanceRow(a) {
     </tr>`;
 }
 
+// The two literal fallback names dwhQueries.js's ground-truth query produces
+// as case_owner when no sakseier could be resolved (see the query's Combined
+// CTE) - these get pulled into their own table instead of cluttering the
+// normal open-avvik list, same idea as the Finance section.
+const NO_OWNER_NAMES = new Set(['Sakseier ikke funnet', 'Manuell ordre – sakseier mangler']);
+
 function renderDashboard(avvikList, notifications) {
   const financeCases = avvikList.filter((a) => isFinanceCase(a.discrepancyType));
-  const rest = avvikList.filter((a) => !isFinanceCase(a.discrepancyType));
+  const withoutFinance = avvikList.filter((a) => !isFinanceCase(a.discrepancyType));
+  const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
+  const noOwnerCases = withoutFinance.filter(isOpenNoOwner);
+  const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
   const open = rest.filter((a) => !a.resolved);
   const resolved = rest.filter((a) => a.resolved);
 
   const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
+  const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
   const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
   const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
 
@@ -288,6 +298,31 @@ function renderDashboard(avvikList, notifications) {
             </tr>
           </thead>
           <tbody>${openRows}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="no-owner-section">
+      <div class="section-header">
+        <h2>Sakseier ikke funnet</h2>
+        <span class="bf-badge bfc-attn-bg">${noOwnerCases.length}</span>
+      </div>
+      <p class="section-note">Ingen sakseier kunne identifiseres for disse - ingen e-post kan sendes for de er utbedret manuelt.</p>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${noOwnerRows}</tbody>
         </table>
       </div>
     </section>
@@ -428,7 +463,7 @@ function renderDashboard(avvikList, notifications) {
     // Each section (open avvik, archive) has its own filter row - scoped
     // per-section so the two "Filtrer innkjøper..." boxes don't clobber
     // each other's filters.
-    document.querySelectorAll('#open-section, details.archive').forEach((section) => {
+    document.querySelectorAll('#open-section, #no-owner-section, details.archive').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
       function applyFilters() {
         const filters = {};
