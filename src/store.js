@@ -112,6 +112,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
     const fresh = freshById.get(existing.id);
     if (fresh) {
       existing.orderId = fresh.orderId;
+      existing.articleNumber = fresh.articleNumber;
       if (!existing.purchaserManuallySet) {
         existing.purchaserName = fresh.purchaserName;
         existing.purchaserEmail = fresh.purchaserEmail;

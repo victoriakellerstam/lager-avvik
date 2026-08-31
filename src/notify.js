@@ -18,24 +18,13 @@ function needsNotification(avvik, now = new Date()) {
 
 // Builds the email that WOULD be sent. Nothing here ever calls a mail provider.
 function buildEmailPreview(avvik) {
-  const tiltak = getInstructions(avvik.discrepancyType).map((step, i) => `${i + 1}. ${step}`);
+  const fixText = getInstructions(avvik.discrepancyType);
 
   return {
     to: avvik.purchaserEmail,
-    subject: `Avvik på din ordre ${avvik.orderId}`,
+    subject: `Avvik på ordre med innkjøpsordrenummer ${avvik.orderId}, SKU ${avvik.articleNumber}`,
     body: [
-      `Hei ${avvik.purchaserName},`,
-      '',
-      `Avvik på din ordre ${avvik.orderId}.`,
-      '',
-      `Avviket gjelder: ${avvik.discrepancyType}.`,
-      '',
-      'Tiltak som kreves fra deg:',
-      ...tiltak,
-      '',
-      'Dersom du har spørsmål, ta kontakt med Finance.',
-      '',
-      'Du mottar denne påminnelsen én gang i uken helt til avviket er markert som løst.',
+      `Avviket gjelder at ${avvik.discrepancyType}. Denne ordrelinjen har ligget med status som mottatt i Visma i ${avvik.daysWaiting} dager. For å fikse opp i avviket: ${fixText}. Dersom du har spørsmål, svar på denne mailen eller ta kontakt med Finance på Teams.`,
       '',
       '(mockup - ingen ekte e-post er sendt)',
     ].join('\n'),

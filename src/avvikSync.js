@@ -45,6 +45,7 @@ async function syncAvvikFromDwh() {
     avvikRows.push({
       id: buildSyntheticId(row),
       orderId: row.supplier_order_number,
+      articleNumber: row.article_number,
       purchaserName,
       purchaserEmail,
       discrepancyType,
