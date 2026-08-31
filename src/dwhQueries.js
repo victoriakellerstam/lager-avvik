@@ -693,6 +693,7 @@ async function fetchAvvikRows() {
                 sol.article_number,
                 sol.lot_number,
                 sol.order_date,
+                sol.days_waiting,
 
                 /*
                 Sakseier:
@@ -829,10 +830,12 @@ async function fetchAvvikRows() {
             article_number,
             lot_number,
             order_date,
+            days_waiting,
             case_owner,
             deviation_scenario
         FROM Combined
         ORDER BY
+            days_waiting DESC,
             supplier_order_number,
             article_number;
       `);

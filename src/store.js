@@ -118,6 +118,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       }
       existing.discrepancyType = fresh.discrepancyType;
       existing.createdAt = fresh.createdAt;
+      existing.daysWaiting = fresh.daysWaiting;
       existing.missingFromLastSyncAt = null;
       updated += 1;
       freshById.delete(existing.id); // consumed; anything left over is new

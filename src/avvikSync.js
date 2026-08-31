@@ -49,6 +49,7 @@ async function syncAvvikFromDwh() {
       purchaserEmail,
       discrepancyType,
       createdAt: toIso(row.order_date),
+      daysWaiting: row.days_waiting,
     });
   }
 

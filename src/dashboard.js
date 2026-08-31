@@ -143,6 +143,7 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
       <td>${escapeHtml(a.orderId)}</td>
       <td>${purchaserCell}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
+      <td>${typeof a.daysWaiting === 'number' ? a.daysWaiting : '—'}</td>
       <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
       ${actionCell}
       <td>
@@ -206,9 +207,10 @@ function renderDashboard(avvikList, notifications) {
   const financeCases = avvikList.filter((a) => isFinanceCase(a.discrepancyType));
   const withoutFinance = avvikList.filter((a) => !isFinanceCase(a.discrepancyType));
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
-  const noOwnerCases = withoutFinance.filter(isOpenNoOwner);
+  const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
+  const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
   const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
-  const open = rest.filter((a) => !a.resolved);
+  const open = rest.filter((a) => !a.resolved).sort(byDaysWaitingDesc);
   const resolved = rest.filter((a) => a.resolved);
 
   const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
@@ -226,7 +228,7 @@ function renderDashboard(avvikList, notifications) {
   * { box-sizing: border-box; }
   body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; }
   h1, h2, h3 { font-family: var(--font-satoshi, Satoshi), "Segoe UI", sans-serif; }
-  .page { max-width: 68rem; margin: 0 auto; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
+  .page { max-width: 96rem; margin: 0 auto; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
   .page-header { margin-bottom: var(--bfs32); }
   .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
   .page-header p { margin: 0; max-width: 46rem; color: var(--bfc-base-c-dimmed); }
@@ -277,10 +279,7 @@ function renderDashboard(avvikList, notifications) {
     <header class="page-header">
       <span class="bf-badge bfc-attn-bg">Under arbeid</span>
       <h1>Lager-avvik</h1>
-      <p>Denne siden er for oss som rydder opp i avvik - innkjøperne ser den ikke.
-        De får kun en e-post om avviket sitt; svarer de på den, eller gir beskjed på annen måte,
-        legger vi det inn som en kommentar her. «Sendte e-poster» er kun simulerte forhåndsvisninger —
-        ingenting sendes ut på ekte i denne mockupen.</p>
+      <p>Legg til en kort forklaring av siden her</p>
       <div class="toolbar">
         <button type="button" id="run-job" class="bf-button bf-button-filled">Kjør ukentlig jobb nå (demo)</button>
         <button type="button" id="test-dwh" class="bf-button">Test tilkobling til dwh</button>
@@ -300,11 +299,12 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
               <th></th>
               <th></th>
               <th></th>
@@ -325,11 +325,12 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
               <th></th>
               <th></th>
               <th></th>
@@ -362,11 +363,12 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
               <th></th>
               <th></th>
               <th></th>
