@@ -2,6 +2,7 @@
 
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
+const { KOSTNADSFAKTURA_REVERSER } = require('./discrepancyTypes');
 
 function escapeHtml(value) {
   return String(value)
@@ -141,6 +142,7 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${purchaserCell}</td>
+      <td>${a.department ? escapeHtml(a.department) : '—'}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>${typeof a.daysWaiting === 'number' ? a.daysWaiting : '—'}</td>
       <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
@@ -168,12 +170,16 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
 }
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
+// The status column shows the actual discrepancyType badge (not a generic
+// Åpen/Løst) since this table now also holds Kostnadsfaktura — reverser
+// cases alongside genuine Spesielle caser - Finance ones.
 function renderFinanceRow(a) {
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
-      <td>${a.resolved ? '<span class="bf-badge bfc-success-bg">Løst</span>' : '<span class="bf-badge bfc-attn-bg">Åpen</span>'}</td>
+      <td>${a.department ? escapeHtml(a.department) : '—'}</td>
+      <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>
         <details>
           <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
@@ -196,8 +202,12 @@ function renderFinanceRow(a) {
 const NO_OWNER_NAMES = new Set(['Sakseier ikke funnet', 'Manuell ordre – sakseier mangler']);
 
 function renderDashboard(avvikList, notifications) {
-  const financeCases = avvikList.filter((a) => isFinanceCase(a.discrepancyType));
-  const withoutFinance = avvikList.filter((a) => !isFinanceCase(a.discrepancyType));
+  // Kostnadsfaktura — reverser lives in the Finance section too (its own
+  // resolve workflow is Finance-internal, same as the other cases here), but
+  // keeps its own discrepancyType/badge rather than being relabeled.
+  const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discrepancyType === KOSTNADSFAKTURA_REVERSER;
+  const financeCases = avvikList.filter(isFinanceSectionCase);
+  const withoutFinance = avvikList.filter((a) => !isFinanceSectionCase(a));
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
   const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
   const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
@@ -289,10 +299,11 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
               <th></th>
               <th></th>
@@ -315,9 +326,10 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th></th>
               <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
               <th></th>
@@ -341,7 +353,7 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Status</th><th>Kommentarer</th><th></th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Kommentarer</th><th></th></tr>
           </thead>
           <tbody>${financeRows}</tbody>
         </table>
@@ -353,10 +365,11 @@ function renderDashboard(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
               <th></th>
               <th></th>

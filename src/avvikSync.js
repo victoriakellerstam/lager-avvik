@@ -29,10 +29,12 @@ async function syncAvvikFromDwh() {
   // at a time.
   const rows = await dwhQueries.fetchAvvikRows();
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
+  const departments = await dwhQueries.fetchDepartments();
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
   );
+  const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
 
   const avvikRows = [];
   for (const row of rows) {
@@ -46,6 +48,7 @@ async function syncAvvikFromDwh() {
       id: buildSyntheticId(row),
       orderId: row.supplier_order_number,
       articleNumber: row.article_number,
+      department: departmentNameByNumber.get(row.department_number) || null,
       purchaserName,
       purchaserEmail,
       discrepancyType,

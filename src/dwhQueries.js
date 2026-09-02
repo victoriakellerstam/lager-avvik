@@ -694,6 +694,7 @@ async function fetchAvvikRows() {
                 sol.lot_number,
                 sol.order_date,
                 sol.days_waiting,
+                sol.department_number,
 
                 /*
                 Sakseier:
@@ -831,6 +832,7 @@ async function fetchAvvikRows() {
             lot_number,
             order_date,
             days_waiting,
+            department_number,
             case_owner,
             deviation_scenario
         FROM Combined
@@ -855,4 +857,16 @@ async function fetchIntilityUsers() {
   });
 }
 
-module.exports = { fetchAvvikRows, fetchIntilityUsers };
+// Department directory, used to look up a readable name for
+// fetchAvvikRows's department_number.
+async function fetchDepartments() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT department_number, department_name
+      FROM [dwh].[dbo].[departments]
+    `);
+    return result.recordset;
+  });
+}
+
+module.exports = { fetchAvvikRows, fetchIntilityUsers, fetchDepartments };
