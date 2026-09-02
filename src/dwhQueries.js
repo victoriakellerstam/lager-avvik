@@ -721,10 +721,13 @@ async function fetchAvvikRows() {
                 END COLLATE Danish_Norwegian_CI_AS AS case_owner,
 
                 /*
-                Internbestilling får alltid fast scenario.
+                Internbestilling får alltid fast scenario. Kun 14000 - 11246
+                er en annen, urelatert "Internbestilling status"-kolonne i
+                kildemodellen, ikke en del av selve klassifiseringen (bekreftet
+                via konkrete ordre-eksempler som ellers feilklassifiseres).
                 */
                 CASE
-                    WHEN sol.project_number IN (11246, 14000)
+                    WHEN sol.project_number = 14000
                         THEN 'Internbestilling'
 
                     WHEN sol.employee_number > 11
