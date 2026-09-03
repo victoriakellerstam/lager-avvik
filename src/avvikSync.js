@@ -78,6 +78,7 @@ async function syncAvvikFromDwh() {
       articleNumber: row.article_number,
       poNumber: row.po_number,
       lotNumber: row.lot_number,
+      ticketUrl: row.ticket_url,
       department,
       purchaserName,
       purchaserEmail,

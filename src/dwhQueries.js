@@ -717,6 +717,7 @@ async function fetchAvvikRows() {
                 sol.days_waiting,
                 sol.department_number,
                 sol.po_number,
+                pt.ticket_url,
                 sol.supplier_id_text,
 
                 /*
@@ -856,6 +857,7 @@ async function fetchAvvikRows() {
             department_number,
             po_number,
             supplier_id_text,
+            ticket_url,
             case_owner,
             deviation_scenario
         FROM Combined

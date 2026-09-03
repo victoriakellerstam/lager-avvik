@@ -40,6 +40,9 @@ function renderDetailRow(a, colSpan) {
   const mediusLinkHtml = a.mediusLink
     ? `<a class="bf-link" href="${escapeHtml(a.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a>`
     : '<span class="section-note">Ingen Medius-lenke funnet for denne linjen.</span>';
+  const ticketUrlHtml = a.ticketUrl
+    ? `<a class="bf-link" href="${escapeHtml(a.ticketUrl)}" target="_blank" rel="noopener noreferrer">Vis saken</a>`
+    : '<span class="section-note">Ingen sak funnet for denne linjen.</span>';
   return `<tr class="detail-row" hidden><td colspan="${colSpan}">
       <div class="detail-grid">
         <div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>
@@ -47,6 +50,7 @@ function renderDetailRow(a, colSpan) {
         <div><strong>Partinummer:</strong> ${a.lotNumber ? escapeHtml(a.lotNumber) : '—'}</div>
         <div><strong>Fakturanummer:</strong> ${a.invoiceNumber ? escapeHtml(a.invoiceNumber) : '—'}</div>
         <div>${mediusLinkHtml}</div>
+        <div>${ticketUrlHtml}</div>
       </div>
     </td></tr>`;
 }
