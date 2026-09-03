@@ -50,7 +50,7 @@ function renderDonutParts(entries, total, colorForIndex, emptyLabel, filterAttrs
       const color = colorForIndex(label, i);
       const filterAttrs = filterAttrsFn ? filterAttrsFn(label) : '';
       const cls = filterAttrs ? ' class="clickable"' : '';
-      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"${cls}${filterAttrs}></circle>`;
+      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="6" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"${cls}${filterAttrs}></circle>`;
     })
     .join('');
 
@@ -75,7 +75,7 @@ function renderDonutCard(title, ariaLabel, segments, legend) {
       <div class="bf-card-title">${title}</div>
       <div class="donut-wrap">
         <svg viewBox="0 0 42 42" class="donut" role="img" aria-label="${ariaLabel}">
-          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--bfc-base-2)" stroke-width="3"></circle>
+          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--bfc-base-2)" stroke-width="6"></circle>
           ${segments}
         </svg>
         <ul class="donut-legend">${legend}</ul>
@@ -166,12 +166,13 @@ function renderStats(openAvvikList, resolvedCount) {
     <div class="bf-card"><div class="bf-card-content">
       <div class="stat-number">${openAvvikList.length}</div>
       <div class="stat-label">Avvik totalt</div>
+      <div class="stat-sublabel" id="filtered-count" hidden></div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
       <div class="stat-number">${resolvedCount}</div>
       <div class="stat-label">Antall løst</div>
     </div></div>
-    <div class="bf-card"><div class="bf-card-content">
+    <div class="bf-card top-list-card"><div class="bf-card-content">
       <div class="stat-label">Topp 5 — flest avvik</div>
       <ol class="top-list">${topList}</ol>
     </div></div>
@@ -425,16 +426,27 @@ const SHARED_SCRIPT = `
     // named filter boxes in different sections/pages don't clobber each other.
     document.querySelectorAll('#open-section, #no-owner-section, details.archive').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
+      // Only #open-section has a matching stat card - null elsewhere, and
+      // every use below is guarded on it.
+      const filteredCountEl = section.id === 'open-section' ? document.getElementById('filtered-count') : null;
       function applyFilters() {
         const filters = {};
         filterInputs.forEach((el) => {
           const value = el.value.trim().toLowerCase();
           if (value) filters[el.dataset.col] = value;
         });
-        section.querySelectorAll('.avvik-row').forEach((row) => {
+        const rows = section.querySelectorAll('.avvik-row');
+        let visibleCount = 0;
+        rows.forEach((row) => {
           const match = Object.keys(filters).every((col) => row.dataset[col].includes(filters[col]));
           row.hidden = !match;
+          if (match) visibleCount++;
         });
+        if (filteredCountEl) {
+          const hasFilter = Object.keys(filters).length > 0;
+          filteredCountEl.hidden = !hasFilter;
+          filteredCountEl.textContent = hasFilter ? 'Viser ' + visibleCount + ' av ' + rows.length : '';
+        }
       }
       filterInputs.forEach((el) => {
         el.addEventListener('input', applyFilters);
@@ -444,14 +456,16 @@ const SHARED_SCRIPT = `
     // Clicking a name in "Topp 5", a donut legend entry, or a donut segment
     // sets the matching filter box on the open-avvik list and re-runs its
     // existing filter logic (above) via a plain input event - no separate
-    // filtering logic needed here.
+    // filtering logic needed here. Clicking the same value again clears it
+    // (toggle), rather than just re-setting the same filter.
     document.querySelectorAll('[data-filter-col]').forEach((el) => {
       el.addEventListener('click', () => {
         const input = document.querySelector(
           '#open-section .filter-input[data-col="' + el.dataset.filterCol + '"]'
         );
         if (!input) return;
-        input.value = el.dataset.filterValue;
+        const alreadyActive = input.value.trim().toLowerCase() === el.dataset.filterValue;
+        input.value = alreadyActive ? '' : el.dataset.filterValue;
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
@@ -498,12 +512,15 @@ const SHARED_STYLE = `
   .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
   .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: #fff; }
   .stat-label { color: #fff; font-size: var(--bf-font-size-s); }
-  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); color: #fff; }
+  .stat-sublabel { color: #fff; font-size: var(--bf-font-size-s); margin-top: var(--bfs4); opacity: 0.85; }
+  .top-list-card { min-width: 20rem; flex: 1 1 20rem; }
+  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-m); color: #fff; columns: 2 12rem; column-gap: var(--bfs16); }
+  .top-list li { break-inside: avoid; }
   .donut-card { min-width: 20rem; flex: 1 1 20rem; }
   .donut-wrap { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
   .donut { width: 8rem; height: 8rem; flex-shrink: 0; transform: rotate(0deg); }
-  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-s); flex: 1 1 12rem; color: #fff; }
-  .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; }
+  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-m); flex: 1 1 12rem; color: #fff; columns: 2 12rem; column-gap: var(--bfs16); }
+  .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; break-inside: avoid; }
   .donut-legend li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
   .legend-swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: var(--bf-radius-full); flex-shrink: 0; }
   .clickable { cursor: pointer; }
