@@ -32,6 +32,92 @@ function renderNotificationHistory(avvikId, notifications) {
     .join('');
 }
 
+// Shared ring-segment math for both donuts below: each segment is one
+// <circle> with a 100-unit circumference (r = 15.91549430918954, since
+// 2*pi*r = 100), so stroke-dasharray/-dashoffset can be expressed directly
+// as percentages.
+function renderDonutParts(entries, total, colorForIndex, emptyLabel) {
+  let cumulative = 0;
+  const segments = entries
+    .map(([label, count], i) => {
+      const percent = total ? (count / total) * 100 : 0;
+      const dashoffset = 25 - cumulative;
+      cumulative += percent;
+      const color = colorForIndex(label, i);
+      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"></circle>`;
+    })
+    .join('');
+
+  const legend = entries.length
+    ? entries
+        .map(([label, count], i) => {
+          const color = colorForIndex(label, i);
+          const percent = total ? Math.round((count / total) * 100) : 0;
+          return `<li><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(label)} — ${count} (${percent}%)</li>`;
+        })
+        .join('')
+    : `<li class="empty">${emptyLabel}</li>`;
+
+  return { segments, legend };
+}
+
+function renderDonutCard(title, ariaLabel, segments, legend) {
+  return `
+    <div class="bf-card donut-card"><div class="bf-card-content">
+      <div class="bf-card-title">${title}</div>
+      <div class="donut-wrap">
+        <svg viewBox="0 0 42 42" class="donut" role="img" aria-label="${ariaLabel}">
+          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--bfc-base-2)" stroke-width="3"></circle>
+          ${segments}
+        </svg>
+        <ul class="donut-legend">${legend}</ul>
+      </div>
+    </div></div>`;
+}
+
+// Colors reuse the same Bifrost category as the type's badge, so the chart
+// and the table agree visually.
+function renderTypeDonut(avvikList) {
+  const total = avvikList.length;
+  const counts = new Map();
+  for (const a of avvikList) {
+    counts.set(a.discrepancyType, (counts.get(a.discrepancyType) || 0) + 1);
+  }
+  const entries = [...counts.entries()].sort((x, y) => y[1] - x[1]);
+  const { segments, legend } = renderDonutParts(
+    entries,
+    total,
+    (type) => `var(--bfc-${getTypeBadgeClass(type)})`,
+    'Ingen avvik registrert.'
+  );
+  return renderDonutCard('Fordeling per avvikstype', 'Fordeling av avvikstyper', segments, legend);
+}
+
+// Departments aren't a small fixed enum like discrepancyType, so colors are
+// generated (evenly spaced hues) instead of reusing badge classes. Capped to
+// the 8 biggest departments plus an "Andre" bucket so the legend stays
+// readable.
+const DEPARTMENT_DONUT_MAX_SLICES = 8;
+
+function renderDepartmentDonut(avvikList) {
+  const total = avvikList.length;
+  const counts = new Map();
+  for (const a of avvikList) {
+    const dept = a.department || 'Ukjent';
+    counts.set(dept, (counts.get(dept) || 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1]);
+  const top = sorted.slice(0, DEPARTMENT_DONUT_MAX_SLICES);
+  const rest = sorted.slice(DEPARTMENT_DONUT_MAX_SLICES);
+  const entries = rest.length
+    ? [...top, ['Andre', rest.reduce((sum, [, count]) => sum + count, 0)]]
+    : top;
+
+  const colorForIndex = (_label, i) => `hsl(${Math.round((i * 360) / Math.max(entries.length, 1))}, 60%, 55%)`;
+  const { segments, legend } = renderDonutParts(entries, total, colorForIndex, 'Ingen avvik registrert.');
+  return renderDonutCard('Fordeling per avdeling', 'Fordeling per avdeling', segments, legend);
+}
+
 function renderStats(avvikList) {
   const open = avvikList.filter((a) => !a.resolved).length;
   const resolved = avvikList.length - open;
@@ -40,10 +126,10 @@ function renderStats(avvikList) {
   for (const a of avvikList) {
     counts.set(a.purchaserName, (counts.get(a.purchaserName) || 0) + 1);
   }
-  const top3 = [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3);
+  const top5 = [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 5);
 
-  const topList = top3.length
-    ? top3
+  const topList = top5.length
+    ? top5
         .map(([name, count]) => `<li>${escapeHtml(name || 'Ukjent')} — ${count} avvik</li>`)
         .join('')
     : '<li class="empty">Ingen avvik registrert.</li>';
@@ -63,58 +149,12 @@ function renderStats(avvikList) {
       <div class="stat-label">Antall løst</div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
-      <div class="stat-label">Flest avvik (totalt)</div>
+      <div class="stat-label">Topp 5 — flest avvik</div>
       <ol class="top-list">${topList}</ol>
     </div></div>
     ${renderTypeDonut(avvikList)}
+    ${renderDepartmentDonut(avvikList)}
   </div>`;
-}
-
-// A dependency-free donut chart: each ring segment is one <circle> with a
-// 100-unit circumference (r = 15.91549430918954, since 2*pi*r = 100), so
-// stroke-dasharray/-dashoffset can be expressed directly as percentages.
-// Colors reuse the same Bifrost category as the type's badge, so the chart
-// and the table agree visually.
-function renderTypeDonut(avvikList) {
-  const total = avvikList.length;
-  const counts = new Map();
-  for (const a of avvikList) {
-    counts.set(a.discrepancyType, (counts.get(a.discrepancyType) || 0) + 1);
-  }
-  const entries = [...counts.entries()].sort((x, y) => y[1] - x[1]);
-
-  let cumulative = 0;
-  const segments = entries
-    .map(([type, count]) => {
-      const percent = total ? (count / total) * 100 : 0;
-      const dashoffset = 25 - cumulative;
-      cumulative += percent;
-      const color = `var(--bfc-${getTypeBadgeClass(type)})`;
-      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"></circle>`;
-    })
-    .join('');
-
-  const legend = entries.length
-    ? entries
-        .map(([type, count]) => {
-          const color = `var(--bfc-${getTypeBadgeClass(type)})`;
-          const percent = total ? Math.round((count / total) * 100) : 0;
-          return `<li><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(type)} — ${count} (${percent}%)</li>`;
-        })
-        .join('')
-    : '<li class="empty">Ingen avvik registrert.</li>';
-
-  return `
-    <div class="bf-card donut-card"><div class="bf-card-content">
-      <div class="bf-card-title">Fordeling per avvikstype</div>
-      <div class="donut-wrap">
-        <svg viewBox="0 0 42 42" class="donut" role="img" aria-label="Fordeling av avvikstyper">
-          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--bfc-base-2)" stroke-width="3"></circle>
-          ${segments}
-        </svg>
-        <ul class="donut-legend">${legend}</ul>
-      </div>
-    </div></div>`;
 }
 
 function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchaserForm }) {
@@ -139,7 +179,7 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
       ? escapeHtml(a.purchaserName)
       : '—';
   return `
-    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${purchaserCell}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
@@ -200,8 +240,9 @@ function renderFinanceRow(a) {
 // CTE) - these get pulled into their own table instead of cluttering the
 // normal open-avvik list, same idea as the Finance section.
 const NO_OWNER_NAMES = new Set(['Sakseier ikke funnet', 'Manuell ordre – sakseier mangler']);
+const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
 
-function renderDashboard(avvikList, notifications) {
+function splitAvvik(avvikList) {
   // Kostnadsfaktura — reverser lives in the Finance section too (its own
   // resolve workflow is Finance-internal, same as the other cases here), but
   // keeps its own discrepancyType/badge rather than being relabeled.
@@ -209,182 +250,44 @@ function renderDashboard(avvikList, notifications) {
   const financeCases = avvikList.filter(isFinanceSectionCase);
   const withoutFinance = avvikList.filter((a) => !isFinanceSectionCase(a));
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
-  const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
   const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
   const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
   const open = rest.filter((a) => !a.resolved).sort(byDaysWaitingDesc);
   const resolved = rest.filter((a) => a.resolved);
+  return { financeCases, noOwnerCases, open, resolved };
+}
 
-  const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
-  const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt', showPurchaserForm: true })).join('');
-  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
-  const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
+const NAV_ITEMS = [
+  { key: 'open', href: '/', label: 'Åpne avvik' },
+  { key: 'finance', href: '/finance', label: 'Saker som løses av Finance' },
+  { key: 'archive', href: '/arkiv', label: 'Arkiv' },
+];
 
-  return `<!DOCTYPE html>
-<html lang="no" data-bf-color-mode="dark">
-<head>
-<meta charset="utf-8">
-<title>Lager-avvik (mockup)</title>
-<link rel="stylesheet" href="https://unpkg.com/@intility/bifrost-css@6.11.2/dist/bifrost-all.css">
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; }
-  h1, h2, h3 { font-family: var(--font-satoshi, Satoshi), "Segoe UI", sans-serif; }
-  .page { max-width: 96rem; margin: 0 auto; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
-  .page-header { margin-bottom: var(--bfs32); }
-  .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
-  .page-header p { margin: 0; max-width: 46rem; color: var(--bfc-base-c-dimmed); }
-  .toolbar { margin-top: var(--bfs16); display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
-  .test-dwh-result { font-size: var(--bf-font-size-s); }
-  .test-dwh-result.ok { color: var(--bfc-success); }
-  .test-dwh-result.fail { color: var(--bfc-alert); }
-  section { margin-top: var(--bfs48); }
-  .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
-  .section-header h2 { margin: 0; }
-  .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
-  .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
-  .section-card .bf-table { margin: 0; }
-  details.archive { margin-top: var(--bfs48); }
-  details.archive > summary { font-size: var(--bf-font-size-l); font-weight: 600; }
-  details.archive .section-card { margin-top: var(--bfs16); }
-  details summary { cursor: pointer; }
-  ul.comments, ul.notif-history { list-style: none; padding: 0; margin: var(--bfs8) 0; }
-  ul.comments li, ul.notif-history li { padding: var(--bfs4) 0; border-bottom: var(--bf-border); font-size: var(--bf-font-size-s); }
-  ul.comments li.empty, ul.notif-history li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
-  ul.comments .ts { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
-  form.add-comment { margin-top: var(--bfs8); display: flex; gap: var(--bfs8); flex-wrap: wrap; }
-  form.add-comment .bf-input { width: auto; }
-  form.set-purchaser { display: flex; gap: var(--bfs8); flex-wrap: wrap; }
-  form.set-purchaser .bf-input { width: auto; min-width: 8rem; }
-  .preview-email { margin-top: var(--bfs8); }
-  .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
-  .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
-  .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
-  .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; }
-  .stat-label { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
-  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); }
-  .donut-card { min-width: 20rem; flex: 1 1 20rem; }
-  .donut-wrap { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
-  .donut { width: 8rem; height: 8rem; flex-shrink: 0; transform: rotate(0deg); }
-  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-s); flex: 1 1 12rem; }
-  .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; }
-  .donut-legend li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
-  .legend-swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: var(--bf-radius-full); flex-shrink: 0; }
-  .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
-  .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
-</style>
-</head>
-<body>
-  <div class="page">
-    <header class="page-header">
-      <span class="bf-badge bfc-attn-bg">Under arbeid</span>
-      <h1>Lager-avvik</h1>
-      <p>Legg til en kort forklaring av siden her</p>
+function renderSidebar(activeKey) {
+  const links = NAV_ITEMS.map(
+    (item) =>
+      `<li><a href="${item.href}"${item.key === activeKey ? ' class="active" aria-current="page"' : ''}>${item.label}</a></li>`
+  ).join('');
+  return `
+  <aside class="sidebar">
+    <div class="brand">Lager-avvik</div>
+    <div class="brand-sub">En nettside laget av Finance</div>
+    <nav><ul>${links}</ul></nav>
+  </aside>`;
+}
+
+function renderToolbar() {
+  return `
       <div class="toolbar">
         <button type="button" id="run-job" class="bf-button bf-button-filled">Kjør ukentlig jobb nå (demo)</button>
         <button type="button" id="test-dwh" class="bf-button">Test tilkobling til dwh</button>
         <span id="test-dwh-result" class="test-dwh-result"></span>
         <button type="button" id="refresh-dwh" class="bf-button">Oppdater fra dwh</button>
         <span id="refresh-dwh-result" class="test-dwh-result"></span>
-      </div>
-    </header>
+      </div>`;
+}
 
-    ${renderStats(avvikList)}
-
-    <section id="open-section">
-      <div class="section-header">
-        <h2>Åpne avvik</h2>
-        <span class="bf-badge bfc-attn-bg">${open.length}</span>
-      </div>
-      <div class="section-card">
-        <table class="bf-table">
-          <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
-            <tr class="filter-row">
-              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
-              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
-              <th></th>
-              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>${openRows}</tbody>
-        </table>
-      </div>
-    </section>
-
-    <section id="no-owner-section">
-      <div class="section-header">
-        <h2>Sakseier ikke funnet</h2>
-        <span class="bf-badge bfc-attn-bg">${noOwnerCases.length}</span>
-      </div>
-      <p class="section-note">Ingen sakseier kunne identifiseres for disse - ingen e-post kan sendes for de er utbedret manuelt.</p>
-      <div class="section-card">
-        <table class="bf-table">
-          <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
-            <tr class="filter-row">
-              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
-              <th></th>
-              <th></th>
-              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>${noOwnerRows}</tbody>
-        </table>
-      </div>
-    </section>
-
-    <section>
-      <div class="section-header">
-        <h2>Spesielle caser - Finance</h2>
-        <span class="bf-badge bfc-theme-bg">${financeCases.length}</span>
-      </div>
-      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det.</p>
-      <div class="section-card">
-        <table class="bf-table">
-          <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Kommentarer</th><th></th></tr>
-          </thead>
-          <tbody>${financeRows}</tbody>
-        </table>
-      </div>
-    </section>
-
-    <details class="archive">
-      <summary class="bf-link">Arkiv — løste avvik (${resolved.length})</summary>
-      <div class="section-card">
-        <table class="bf-table">
-          <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
-            <tr class="filter-row">
-              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
-              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
-              <th></th>
-              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>${resolvedRows}</tbody>
-        </table>
-      </div>
-    </details>
-  </div>
-
-  <script>
+const SHARED_SCRIPT = `
     document.querySelectorAll('.resolve').forEach((btn) => {
       btn.addEventListener('click', async () => {
         await fetch('/api/avvik/' + btn.dataset.id + '/resolve', { method: 'POST' });
@@ -397,11 +300,13 @@ function renderDashboard(avvikList, notifications) {
         location.reload();
       });
     });
-    document.getElementById('run-job').addEventListener('click', async () => {
+    const runJobBtn = document.getElementById('run-job');
+    if (runJobBtn) runJobBtn.addEventListener('click', async () => {
       await fetch('/api/jobs/run-weekly', { method: 'POST' });
       location.reload();
     });
-    document.getElementById('test-dwh').addEventListener('click', async () => {
+    const testDwhBtn = document.getElementById('test-dwh');
+    if (testDwhBtn) testDwhBtn.addEventListener('click', async () => {
       const out = document.getElementById('test-dwh-result');
       out.textContent = 'Kobler til...';
       out.className = 'test-dwh-result';
@@ -420,7 +325,8 @@ function renderDashboard(avvikList, notifications) {
         out.className = 'test-dwh-result fail';
       }
     });
-    document.getElementById('refresh-dwh').addEventListener('click', async () => {
+    const refreshDwhBtn = document.getElementById('refresh-dwh');
+    if (refreshDwhBtn) refreshDwhBtn.addEventListener('click', async () => {
       const out = document.getElementById('refresh-dwh-result');
       out.textContent = 'Oppdaterer...';
       out.className = 'test-dwh-result';
@@ -493,9 +399,8 @@ function renderDashboard(avvikList, notifications) {
         }
       });
     });
-    // Each section (open avvik, archive) has its own filter row - scoped
-    // per-section so the two "Filtrer innkjøper..." boxes don't clobber
-    // each other's filters.
+    // Each section with a filter row is scoped independently, so identically-
+    // named filter boxes in different sections/pages don't clobber each other.
     document.querySelectorAll('#open-section, #no-owner-section, details.archive').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
       function applyFilters() {
@@ -513,10 +418,204 @@ function renderDashboard(avvikList, notifications) {
         el.addEventListener('input', applyFilters);
         el.addEventListener('change', applyFilters);
       });
-    });
-  </script>
+    });`;
+
+const SHARED_STYLE = `
+  * { box-sizing: border-box; }
+  body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; display: flex; min-height: 100vh; }
+  h1, h2, h3 { font-family: var(--font-satoshi, Satoshi), "Segoe UI", sans-serif; }
+  .sidebar { width: 17rem; flex-shrink: 0; background: var(--bfc-base-2); border-right: var(--bf-border); padding: var(--bfs24) var(--bfs16); position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; }
+  .sidebar .brand { font-weight: 700; font-size: var(--bf-font-size-l); color: #fff; }
+  .sidebar .brand-sub { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); margin: var(--bfs4) 0 var(--bfs24); }
+  .sidebar nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
+  .sidebar nav a { display: block; padding: var(--bfs8) var(--bfs12); border-radius: var(--bf-radius-s); color: var(--bfc-base-c); text-decoration: none; font-size: var(--bf-font-size-m); }
+  .sidebar nav a:hover { background: var(--bfc-base-3); }
+  .sidebar nav a.active { background: var(--bfc-theme); color: var(--bfc-theme-c, #fff); font-weight: 600; }
+  .main { flex: 1 1 auto; min-width: 0; }
+  .page { max-width: 96rem; margin: 0 auto; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
+  .page-header { margin-bottom: var(--bfs32); }
+  .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
+  .toolbar { margin-top: var(--bfs16); display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
+  .test-dwh-result { font-size: var(--bf-font-size-s); }
+  .test-dwh-result.ok { color: var(--bfc-success); }
+  .test-dwh-result.fail { color: var(--bfc-alert); }
+  section { margin-top: var(--bfs48); }
+  .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
+  .section-header h2 { margin: 0; }
+  .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
+  .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+  .section-card .bf-table { margin: 0; }
+  details.archive > summary { font-size: var(--bf-font-size-l); font-weight: 600; }
+  details.archive .section-card { margin-top: var(--bfs16); }
+  details summary { cursor: pointer; }
+  ul.comments, ul.notif-history { list-style: none; padding: 0; margin: var(--bfs8) 0; }
+  ul.comments li, ul.notif-history li { padding: var(--bfs4) 0; border-bottom: var(--bf-border); font-size: var(--bf-font-size-s); }
+  ul.comments li.empty, ul.notif-history li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
+  ul.comments .ts { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
+  form.add-comment { margin-top: var(--bfs8); display: flex; gap: var(--bfs8); flex-wrap: wrap; }
+  form.add-comment .bf-input { width: auto; }
+  form.set-purchaser { display: flex; gap: var(--bfs8); flex-wrap: wrap; }
+  form.set-purchaser .bf-input { width: auto; min-width: 8rem; }
+  .preview-email { margin-top: var(--bfs8); }
+  .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
+  .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
+  .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+  .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: #fff; }
+  .stat-label { color: #fff; font-size: var(--bf-font-size-s); }
+  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-s); color: #fff; }
+  .donut-card { min-width: 20rem; flex: 1 1 20rem; }
+  .donut-wrap { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
+  .donut { width: 8rem; height: 8rem; flex-shrink: 0; transform: rotate(0deg); }
+  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-s); flex: 1 1 12rem; color: #fff; }
+  .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; }
+  .donut-legend li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
+  .legend-swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: var(--bf-radius-full); flex-shrink: 0; }
+  .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
+  .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }`;
+
+function renderShell(activeKey, title, contentHtml) {
+  return `<!DOCTYPE html>
+<html lang="no" data-bf-color-mode="dark">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)} — Lager-avvik</title>
+<link rel="stylesheet" href="https://unpkg.com/@intility/bifrost-css@6.11.2/dist/bifrost-all.css">
+<style>${SHARED_STYLE}</style>
+</head>
+<body>
+  ${renderSidebar(activeKey)}
+  <main class="main">
+    <div class="page">
+      <header class="page-header">
+        <span class="bf-badge bfc-attn-bg">Under arbeid</span>
+        <h1>${escapeHtml(title)}</h1>
+        ${renderToolbar()}
+      </header>
+      ${contentHtml}
+    </div>
+  </main>
+  <script>${SHARED_SCRIPT}</script>
 </body>
 </html>`;
 }
 
-module.exports = { renderDashboard, escapeHtml };
+function renderOpenAvvikPage(avvikList, notifications) {
+  const { open } = splitAvvik(avvikList);
+  const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
+
+  const content = `
+    ${renderStats(avvikList)}
+
+    <section id="open-section">
+      <div class="section-header">
+        <h2>Åpne avvik</h2>
+        <span class="bf-badge bfc-attn-bg">${open.length}</span>
+      </div>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${openRows}</tbody>
+        </table>
+      </div>
+    </section>`;
+
+  return renderShell('open', 'Åpne avvik', content);
+}
+
+function renderFinancePage(avvikList, notifications) {
+  const { financeCases, noOwnerCases } = splitAvvik(avvikList);
+  const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt', showPurchaserForm: true })).join('');
+  const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
+
+  const content = `
+    <section>
+      <div class="section-header">
+        <h2>Spesielle caser - Finance</h2>
+        <span class="bf-badge bfc-theme-bg">${financeCases.length}</span>
+      </div>
+      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det.</p>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Kommentarer</th><th></th></tr>
+          </thead>
+          <tbody>${financeRows}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="no-owner-section">
+      <div class="section-header">
+        <h2>Sakseier ikke funnet</h2>
+        <span class="bf-badge bfc-attn-bg">${noOwnerCases.length}</span>
+      </div>
+      <p class="section-note">Ingen sakseier kunne identifiseres for disse - Finance må fylle inn riktig innkjøper her før saken flyttes til «Åpne avvik».</p>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th></th>
+              <th></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${noOwnerRows}</tbody>
+        </table>
+      </div>
+    </section>`;
+
+  return renderShell('finance', 'Saker som løses av Finance', content);
+}
+
+function renderArchivePage(avvikList, notifications) {
+  const { resolved } = splitAvvik(avvikList);
+  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
+
+  const content = `
+    <details class="archive" open>
+      <summary class="bf-link">Arkiv — løste avvik (${resolved.length})</summary>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${resolvedRows}</tbody>
+        </table>
+      </div>
+    </details>`;
+
+  return renderShell('archive', 'Arkiv', content);
+}
+
+module.exports = { renderOpenAvvikPage, renderFinancePage, renderArchivePage, escapeHtml };

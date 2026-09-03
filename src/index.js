@@ -7,7 +7,7 @@ const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
 const { syncAvvikFromDwh } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
-const { renderDashboard } = require('./dashboard');
+const { renderOpenAvvikPage, renderFinancePage, renderArchivePage } = require('./dashboard');
 
 const PORT = process.env.PORT || 8080;
 
@@ -67,11 +67,24 @@ function createServer() {
         return sendJson(res, 200, { status: 'ok' });
       }
 
+      // Rendered before writing headers in all three routes below - if
+      // rendering throws, the outer catch needs to still be able to send a
+      // fresh error response instead of hitting ERR_HTTP_HEADERS_SENT on an
+      // already-started one.
       if (req.method === 'GET' && pathname === '/') {
-        // Render before writing headers - if rendering throws, the outer
-        // catch below needs to still be able to send a fresh error response
-        // instead of hitting ERR_HTTP_HEADERS_SENT on an already-started one.
-        const html = renderDashboard(store.listAvvik(), store.listNotifications());
+        const html = renderOpenAvvikPage(store.listAvvik(), store.listNotifications());
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
+      if (req.method === 'GET' && pathname === '/finance') {
+        const html = renderFinancePage(store.listAvvik(), store.listNotifications());
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
+      if (req.method === 'GET' && pathname === '/arkiv') {
+        const html = renderArchivePage(store.listAvvik(), store.listNotifications());
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }
