@@ -699,6 +699,8 @@ async function fetchAvvikRows() {
                 sol.order_date,
                 sol.days_waiting,
                 sol.department_number,
+                sol.po_number,
+                sol.supplier_id_text,
 
                 /*
                 Sakseier:
@@ -835,6 +837,8 @@ async function fetchAvvikRows() {
             order_date,
             days_waiting,
             department_number,
+            po_number,
+            supplier_id_text,
             case_owner,
             deviation_scenario
         FROM Combined
@@ -874,4 +878,27 @@ async function fetchDepartments() {
   });
 }
 
-module.exports = { fetchAvvikRows, fetchIntilityUsers, fetchDepartments };
+// Medius link per PO+article+supplier, per the user's exact join: lines to
+// order via purchase_order/article_code/supplier_id, lines to head via
+// purchase_order+supplier_id (not document_id - this is a distinct lookup
+// from fetchAvvikRows's own Medius matching, added specifically to surface a
+// clickable link, not to reclassify anything).
+async function fetchMediusLinks() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT
+        mil.purchase_order,
+        mil.article_code,
+        mil.supplier_id,
+        mih.medius_link
+      FROM [dwh].[finance].[medius_invoice_lines] mil
+      INNER JOIN [dwh].[finance].[medius_invoice_head] mih
+        ON mih.purchase_order = mil.purchase_order
+       AND mih.supplier_id = mil.supplier_id
+      WHERE mih.medius_link IS NOT NULL
+    `);
+    return result.recordset;
+  });
+}
+
+module.exports = { fetchAvvikRows, fetchIntilityUsers, fetchDepartments, fetchMediusLinks };

@@ -5,7 +5,7 @@ const store = require('./store');
 const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
-const { syncAvvikFromDwh } = require('./avvikSync');
+const { syncAvvikFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
 const { renderOpenAvvikPage, renderFinancePage, renderArchivePage } = require('./dashboard');
 
@@ -121,7 +121,15 @@ function createServer() {
         if (name.length > 100 || email.length > 200) {
           return sendJson(res, 400, { error: 'name or email is too long' });
         }
-        const updated = store.setManualPurchaser(parseAvvikId(purchaserMatch[1]), name, email);
+        // Best-effort: a failed lookup (e.g. dwh unreachable) shouldn't block
+        // saving the purchaser correction itself.
+        let department = null;
+        try {
+          department = await resolveDepartmentForPurchaser(name);
+        } catch (err) {
+          console.warn(`Could not resolve department for manually-set purchaser: ${err.message}`);
+        }
+        const updated = store.setManualPurchaser(parseAvvikId(purchaserMatch[1]), name, email, department);
         if (!updated) return sendJson(res, 404, { error: 'avvik not found' });
         return sendJson(res, 200, updated);
       }

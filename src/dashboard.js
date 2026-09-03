@@ -32,6 +32,23 @@ function renderNotificationHistory(avvikId, notifications) {
     .join('');
 }
 
+// A hidden row directly under a data row, toggled by clicking anywhere on
+// that row that isn't itself interactive (see the .avvik-row click handler
+// in SHARED_SCRIPT). colSpan must match the number of <td>s the calling
+// row-renderer produces, or the table columns misalign.
+function renderDetailRow(a, colSpan) {
+  const mediusLinkHtml = a.mediusLink
+    ? `<a class="bf-link" href="${escapeHtml(a.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a>`
+    : '<span class="section-note">Ingen Medius-lenke funnet for denne linjen.</span>';
+  return `<tr class="detail-row" hidden><td colspan="${colSpan}">
+      <div class="detail-grid">
+        <div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>
+        <div><strong>SKU (artikkelnummer):</strong> ${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</div>
+        <div>${mediusLinkHtml}</div>
+      </div>
+    </td></tr>`;
+}
+
 // Shared ring-segment math for both donuts below: each segment is one
 // <circle> with a 100-unit circumference (r = 15.91549430918954, since
 // 2*pi*r = 100), so stroke-dasharray/-dashoffset can be expressed directly
@@ -230,7 +247,7 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
         <button type="button" class="bf-button bf-button-small preview-email" data-id="${a.id}">Vis e-posteksempel</button>
         <pre class="email-preview" data-id="${a.id}" hidden></pre>
       </td>
-    </tr>`;
+    </tr>${renderDetailRow(a, 9)}`;
 }
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
@@ -256,7 +273,7 @@ function renderFinanceRow(a) {
         </details>
       </td>
       <td>${a.resolved ? '' : `<button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button>`}</td>
-    </tr>`;
+    </tr>${renderDetailRow(a, 6)}`;
 }
 
 // The two literal fallback names dwhQueries.js's ground-truth query produces
@@ -311,6 +328,33 @@ function renderToolbar() {
 }
 
 const SHARED_SCRIPT = `
+    (function () {
+      const themeToggle = document.getElementById('theme-toggle');
+      if (!themeToggle) return;
+      function updateLabel() {
+        const mode = document.documentElement.getAttribute('data-bf-color-mode') || 'dark';
+        themeToggle.textContent = mode === 'light' ? 'Mørk modus' : 'Lys modus';
+      }
+      updateLabel();
+      themeToggle.addEventListener('click', () => {
+        const current = document.documentElement.getAttribute('data-bf-color-mode') || 'dark';
+        const next = current === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-bf-color-mode', next);
+        try { localStorage.setItem('bfColorMode', next); } catch (e) {}
+        updateLabel();
+      });
+    })();
+    // Clicking anywhere on an avvik row that isn't itself interactive
+    // toggles a hidden detail row (PO-nummer, SKU, Medius-lenke) right below it.
+    document.querySelectorAll('.avvik-row').forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('button, a, input, textarea, form, details, summary')) return;
+        const detail = row.nextElementSibling;
+        if (detail && detail.classList.contains('detail-row')) {
+          detail.hidden = !detail.hidden;
+        }
+      });
+    });
     document.querySelectorAll('.resolve').forEach((btn) => {
       btn.addEventListener('click', async () => {
         await fetch('/api/avvik/' + btn.dataset.id + '/resolve', { method: 'POST' });
@@ -440,7 +484,12 @@ const SHARED_SCRIPT = `
         rows.forEach((row) => {
           const match = Object.keys(filters).every((col) => row.dataset[col].includes(filters[col]));
           row.hidden = !match;
-          if (match) visibleCount++;
+          if (match) {
+            visibleCount++;
+          } else {
+            const detail = row.nextElementSibling;
+            if (detail && detail.classList.contains('detail-row')) detail.hidden = true;
+          }
         });
         if (filteredCountEl) {
           const hasFilter = Object.keys(filters).length > 0;
@@ -476,7 +525,7 @@ const SHARED_STYLE = `
   body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; display: flex; min-height: 100vh; }
   h1, h2, h3 { font-family: var(--font-satoshi, Satoshi), "Segoe UI", sans-serif; }
   .sidebar { width: 17rem; flex-shrink: 0; background: var(--bfc-base-2); border-right: var(--bf-border); padding: var(--bfs24) var(--bfs16); position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; }
-  .sidebar .brand { font-weight: 700; font-size: var(--bf-font-size-h2); color: #fff; margin-bottom: var(--bfs24); }
+  .sidebar .brand { font-weight: 700; font-size: var(--bf-font-size-h2); color: var(--bfc-base-c); margin-bottom: var(--bfs24); }
   .sidebar nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
   .sidebar nav a { display: block; padding: var(--bfs8) var(--bfs12); border-radius: var(--bf-radius-s); color: var(--bfc-base-c); text-decoration: none; font-size: var(--bf-font-size-m); }
   .sidebar nav a:hover { background: var(--bfc-base-3); }
@@ -510,16 +559,16 @@ const SHARED_STYLE = `
   .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
   .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
   .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
-  .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: #fff; }
-  .stat-label { color: #fff; font-size: var(--bf-font-size-s); }
-  .stat-sublabel { color: #fff; font-size: var(--bf-font-size-s); margin-top: var(--bfs4); opacity: 0.85; }
+  .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: var(--bfc-base-c); }
+  .stat-label { color: var(--bfc-base-c); font-size: var(--bf-font-size-s); }
+  .stat-sublabel { color: var(--bfc-base-c); font-size: var(--bf-font-size-s); margin-top: var(--bfs4); opacity: 0.85; }
   .top-list-card { min-width: 20rem; flex: 1 1 20rem; }
-  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-m); color: #fff; columns: 2 12rem; column-gap: var(--bfs16); }
+  .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-m); color: var(--bfc-base-c); }
   .top-list li { break-inside: avoid; }
   .donut-card { min-width: 20rem; flex: 1 1 20rem; }
   .donut-wrap { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
   .donut { width: 8rem; height: 8rem; flex-shrink: 0; transform: rotate(0deg); }
-  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-m); flex: 1 1 12rem; color: #fff; columns: 2 12rem; column-gap: var(--bfs16); }
+  .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-m); flex: 1 1 12rem; color: var(--bfc-base-c); columns: 2 12rem; column-gap: var(--bfs16); }
   .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; break-inside: avoid; }
   .donut-legend li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
   .legend-swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: var(--bf-radius-full); flex-shrink: 0; }
@@ -527,18 +576,36 @@ const SHARED_STYLE = `
   li.clickable:hover, .top-list li.clickable:hover { text-decoration: underline; }
   circle.clickable:hover { opacity: 0.8; }
   .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
-  .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }`;
+  .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
+  .theme-toggle-btn { position: fixed; top: var(--bfs16); right: var(--bfs16); z-index: 50; }
+  .avvik-row { cursor: pointer; }
+  .detail-row td { background: var(--bfc-base-2); padding: var(--bfs16); }
+  .detail-grid { display: flex; gap: var(--bfs32); flex-wrap: wrap; font-size: var(--bf-font-size-s); }`;
+
+// Runs before the stylesheet/body so a stored preference applies with no
+// flash of the server-rendered default (dark) on load.
+const THEME_RESTORE_SCRIPT = `
+  (function () {
+    try {
+      var stored = localStorage.getItem('bfColorMode');
+      if (stored === 'light' || stored === 'dark') {
+        document.documentElement.setAttribute('data-bf-color-mode', stored);
+      }
+    } catch (e) {}
+  })();`;
 
 function renderShell(activeKey, title, contentHtml, { showToolbar } = {}) {
   return `<!DOCTYPE html>
 <html lang="no" data-bf-color-mode="dark">
 <head>
 <meta charset="utf-8">
+<script>${THEME_RESTORE_SCRIPT}</script>
 <title>${escapeHtml(title)} — Lager-avvik</title>
 <link rel="stylesheet" href="https://unpkg.com/@intility/bifrost-css@6.11.2/dist/bifrost-all.css">
 <style>${SHARED_STYLE}</style>
 </head>
 <body>
+  <button type="button" id="theme-toggle" class="bf-button theme-toggle-btn"></button>
   ${renderSidebar(activeKey)}
   <main class="main">
     <div class="page">
@@ -591,12 +658,32 @@ function renderOpenAvvikPage(avvikList, notifications) {
   return renderShell('open', 'Åpne avvik', content, { showToolbar: true });
 }
 
+function renderFinanceStats(financeCount, noOwnerCount) {
+  return `
+  <div class="stats">
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${financeCount + noOwnerCount}</div>
+      <div class="stat-label">Totalt (begge tabeller)</div>
+    </div></div>
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${financeCount}</div>
+      <div class="stat-label">Spesielle caser - Finance</div>
+    </div></div>
+    <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${noOwnerCount}</div>
+      <div class="stat-label">Sakseier ikke funnet</div>
+    </div></div>
+  </div>`;
+}
+
 function renderFinancePage(avvikList, notifications) {
   const { financeCases, noOwnerCases } = splitAvvik(avvikList);
   const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt', showPurchaserForm: true })).join('');
   const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
 
   const content = `
+    ${renderFinanceStats(financeCases.length, noOwnerCases.length)}
+
     <section>
       <div class="section-header">
         <h2>Spesielle caser - Finance</h2>

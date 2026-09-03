@@ -40,13 +40,18 @@ function reopenAvvik(id) {
 // "Sakseier ikke funnet" / "Manuell ordre – sakseier mangler" (see
 // dashboard.js's NO_OWNER_NAMES). Sets purchaserManuallySet so a later
 // mergeFromDwh doesn't overwrite this correction with dwh's answer again -
-// once someone's identified the real owner, that sticks.
-function setManualPurchaser(id, name, email) {
+// once someone's identified the real owner, that sticks. department (looked
+// up by index.js via avvikSync.resolveDepartmentForPurchaser) only replaces
+// the existing value when a real one was found - a name with no employee
+// match shouldn't blank out a department_number-based value that's still
+// perfectly valid.
+function setManualPurchaser(id, name, email, department) {
   const avvik = getAvvik(id);
   if (!avvik) return null;
   avvik.purchaserName = name;
   avvik.purchaserEmail = email || null;
   avvik.purchaserManuallySet = true;
+  if (department) avvik.department = department;
   return avvik;
 }
 
@@ -113,10 +118,12 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
     if (fresh) {
       existing.orderId = fresh.orderId;
       existing.articleNumber = fresh.articleNumber;
-      existing.department = fresh.department;
+      existing.poNumber = fresh.poNumber;
+      existing.mediusLink = fresh.mediusLink;
       if (!existing.purchaserManuallySet) {
         existing.purchaserName = fresh.purchaserName;
         existing.purchaserEmail = fresh.purchaserEmail;
+        existing.department = fresh.department;
       }
       existing.discrepancyType = fresh.discrepancyType;
       existing.createdAt = fresh.createdAt;

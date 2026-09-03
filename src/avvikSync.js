@@ -14,6 +14,14 @@ function buildSyntheticId(row) {
   return crypto.createHash('sha256').update(parts.join(':')).digest('hex').slice(0, 16);
 }
 
+// Loose key (trimmed, lowercased) for matching a fetchMediusLinks row against
+// an avvik row's own po_number/article_number/supplier_id_text - guards
+// against harmless formatting differences (case, stray whitespace) between
+// the two independently-sourced values.
+function buildMediusLinkKey(poNumber, articleNumber, supplierIdText) {
+  return [poNumber, articleNumber, supplierIdText].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
+}
+
 /**
  * Runs one full dwh -> avvik refresh: dwhQueries.js's fetchAvvikRows query
  * does the actual classification and purchaser resolution in SQL (see
@@ -30,6 +38,7 @@ async function syncAvvikFromDwh() {
   const rows = await dwhQueries.fetchAvvikRows();
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
   const departments = await dwhQueries.fetchDepartments();
+  const mediusLinks = await dwhQueries.fetchMediusLinks();
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
@@ -38,6 +47,9 @@ async function syncAvvikFromDwh() {
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.department])
   );
   const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
+  const mediusLinkByKey = new Map(
+    mediusLinks.map((m) => [buildMediusLinkKey(m.purchase_order, m.article_code, m.supplier_id), m.medius_link])
+  );
 
   const avvikRows = [];
   for (const row of rows) {
@@ -52,17 +64,21 @@ async function syncAvvikFromDwh() {
       departmentNameByNumber.get(row.department_number) ||
       departmentByFullName.get(normalizeFullNameForMatching(purchaserName)) ||
       null;
+    const mediusLink =
+      mediusLinkByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) || null;
 
     avvikRows.push({
       id: buildSyntheticId(row),
       orderId: row.supplier_order_number,
       articleNumber: row.article_number,
+      poNumber: row.po_number,
       department,
       purchaserName,
       purchaserEmail,
       discrepancyType,
       createdAt: toIso(row.order_date),
       daysWaiting: row.days_waiting,
+      mediusLink,
     });
   }
 
@@ -76,4 +92,17 @@ async function syncAvvikFromDwh() {
   return avvikRows;
 }
 
-module.exports = { syncAvvikFromDwh };
+// Used by index.js's manual-purchaser endpoint: when someone types in a real
+// sakseier name for a "Sakseier ikke funnet" case, look up that person's own
+// department the same way the sync above does, so department improves along
+// with the purchaser instead of staying stuck at whatever (if anything)
+// department_number resolved to.
+async function resolveDepartmentForPurchaser(name) {
+  if (!name) return null;
+  const intilityUsers = await dwhQueries.fetchIntilityUsers();
+  const normalized = normalizeFullNameForMatching(name);
+  const match = intilityUsers.find((u) => normalizeFullNameForMatching(u.user_full_name) === normalized);
+  return (match && match.department) || null;
+}
+
+module.exports = { syncAvvikFromDwh, resolveDepartmentForPurchaser };
