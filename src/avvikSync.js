@@ -48,7 +48,7 @@ async function syncAvvikFromDwh() {
   );
   const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
   const mediusLinkByKey = new Map(
-    mediusLinks.map((m) => [buildMediusLinkKey(m.purchase_order, m.article_code, m.supplier_id), m.medius_link])
+    mediusLinks.map((m) => [buildMediusLinkKey(m.visma_purchase_order, m.article_code, m.supplier_id), m.medius_link])
   );
 
   const avvikRows = [];
@@ -58,11 +58,12 @@ async function syncAvvikFromDwh() {
 
     const purchaserName = row.case_owner || null;
     const purchaserEmail = resolvePurchaserEmail(purchaserName, emailByFullName);
-    // Fallback: when department_number doesn't resolve to a name, use the
-    // resolved sakseier's own department from intility_users instead.
+    // The resolved sakseier's own department (intility_users) is primary -
+    // it's who actually owns the case. department_number is only a fallback
+    // for when no sakseier could be resolved at all.
     const department =
-      departmentNameByNumber.get(row.department_number) ||
       departmentByFullName.get(normalizeFullNameForMatching(purchaserName)) ||
+      departmentNameByNumber.get(row.department_number) ||
       null;
     const mediusLink =
       mediusLinkByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) || null;

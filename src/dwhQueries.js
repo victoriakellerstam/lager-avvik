@@ -315,7 +315,16 @@ async function fetchAvvikRows() {
                 ih.supplier_id COLLATE Danish_Norwegian_CI_AS
         ),
 
-        /* Avgrenser ticketstabellen tidlig */
+        /*
+        Avgrenser ticketstabellen tidlig.
+
+        En saksbehandler fra avdelingen "Setup" skal aldri kunne bli valgt
+        som sakseier, uansett prioritetsnivå (bekreftet feil: ordre 309622
+        fikk en Setup-ansatt fordi ingen ting ekskluderte vedkommende, selv
+        om en riktig "Bestilling"-ticket med en annen saksbehandler fantes).
+        Ekskludert helt fra kandidatpoolen her - ikke bare nedprioritert -
+        så det ikke kan vinne på noe prioritetsnivå.
+        */
         TicketSource AS
         (
             SELECT
@@ -339,7 +348,15 @@ async function fetchAvvikRows() {
 
             FROM [dwh].[customer_inquiries].[tickets] AS t
 
+            LEFT JOIN [dwh].[dbo].[intility_users] AS wu
+                ON wu.user_full_name COLLATE Danish_Norwegian_CI_AS
+                 = t.intility_worker_fullname COLLATE Danish_Norwegian_CI_AS
+
             WHERE t.last_changed_at >= @ticketsCutoff
+              AND (
+                  wu.department IS NULL
+                  OR wu.department COLLATE Danish_Norwegian_CI_AS <> 'Setup' COLLATE Danish_Norwegian_CI_AS
+              )
         ),
 
         /*
@@ -879,21 +896,23 @@ async function fetchDepartments() {
 }
 
 // Medius link per PO+article+supplier, per the user's exact join: lines to
-// order via purchase_order/article_code/supplier_id, lines to head via
-// purchase_order+supplier_id (not document_id - this is a distinct lookup
-// from fetchAvvikRows's own Medius matching, added specifically to surface a
-// clickable link, not to reclassify anything).
+// order via PO/article_code/supplier_id, lines to head via PO+supplier_id
+// (not document_id - this is a distinct lookup from fetchAvvikRows's own
+// Medius matching, added specifically to surface a clickable link, not to
+// reclassify anything). The PO column is visma_purchase_order, not
+// purchase_order (confirmed via a real "Invalid column name" error) -
+// matches every other Medius query in this file.
 async function fetchMediusLinks() {
   return withPool(async (pool) => {
     const result = await pool.request().query(`
       SELECT
-        mil.purchase_order,
+        mil.visma_purchase_order,
         mil.article_code,
         mil.supplier_id,
         mih.medius_link
       FROM [dwh].[finance].[medius_invoice_lines] mil
       INNER JOIN [dwh].[finance].[medius_invoice_head] mih
-        ON mih.purchase_order = mil.purchase_order
+        ON mih.visma_purchase_order = mil.visma_purchase_order
        AND mih.supplier_id = mil.supplier_id
       WHERE mih.medius_link IS NOT NULL
     `);
