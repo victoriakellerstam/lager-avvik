@@ -35,8 +35,12 @@ function renderNotificationHistory(avvikId, notifications) {
 // Shared ring-segment math for both donuts below: each segment is one
 // <circle> with a 100-unit circumference (r = 15.91549430918954, since
 // 2*pi*r = 100), so stroke-dasharray/-dashoffset can be expressed directly
-// as percentages.
-function renderDonutParts(entries, total, colorForIndex, emptyLabel) {
+// as percentages. filterAttrsFn(label), if given, returns a data-filter-col/
+// data-filter-value attribute string for labels that should filter the open
+// list when clicked (segment or legend entry) - return '' for a label that
+// shouldn't be clickable (e.g. the "Andre" bucket, which isn't a real value
+// any row actually has).
+function renderDonutParts(entries, total, colorForIndex, emptyLabel, filterAttrsFn) {
   let cumulative = 0;
   const segments = entries
     .map(([label, count], i) => {
@@ -44,7 +48,9 @@ function renderDonutParts(entries, total, colorForIndex, emptyLabel) {
       const dashoffset = 25 - cumulative;
       cumulative += percent;
       const color = colorForIndex(label, i);
-      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"></circle>`;
+      const filterAttrs = filterAttrsFn ? filterAttrsFn(label) : '';
+      const cls = filterAttrs ? ' class="clickable"' : '';
+      return `<circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="${color}" stroke-width="3" stroke-dasharray="${percent.toFixed(2)} ${(100 - percent).toFixed(2)}" stroke-dashoffset="${dashoffset.toFixed(2)}"${cls}${filterAttrs}></circle>`;
     })
     .join('');
 
@@ -53,7 +59,9 @@ function renderDonutParts(entries, total, colorForIndex, emptyLabel) {
         .map(([label, count], i) => {
           const color = colorForIndex(label, i);
           const percent = total ? Math.round((count / total) * 100) : 0;
-          return `<li><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(label)} — ${count} (${percent}%)</li>`;
+          const filterAttrs = filterAttrsFn ? filterAttrsFn(label) : '';
+          const cls = filterAttrs ? ' class="clickable"' : '';
+          return `<li${cls}${filterAttrs}><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(label)} — ${count} (${percent}%)</li>`;
         })
         .join('')
     : `<li class="empty">${emptyLabel}</li>`;
@@ -84,11 +92,13 @@ function renderTypeDonut(avvikList) {
     counts.set(a.discrepancyType, (counts.get(a.discrepancyType) || 0) + 1);
   }
   const entries = [...counts.entries()].sort((x, y) => y[1] - x[1]);
+  const filterAttrs = (type) => ` data-filter-col="type" data-filter-value="${escapeHtml(type.toLowerCase())}"`;
   const { segments, legend } = renderDonutParts(
     entries,
     total,
     (type) => `var(--bfc-${getTypeBadgeClass(type)})`,
-    'Ingen avvik registrert.'
+    'Ingen avvik registrert.',
+    filterAttrs
   );
   return renderDonutCard('Fordeling per avvikstype', 'Fordeling av avvikstyper', segments, legend);
 }
@@ -96,8 +106,12 @@ function renderTypeDonut(avvikList) {
 // Departments aren't a small fixed enum like discrepancyType, so colors are
 // generated (evenly spaced hues) instead of reusing badge classes. Capped to
 // the 8 biggest departments plus an "Andre" bucket so the legend stays
-// readable.
+// readable. "Andre" - short for "andre avdelinger" (other departments) -
+// bundles everything past the top 8 into one slice; it isn't a real
+// department value any row has, so it's excluded from click-to-filter (same
+// for "Ukjent", the label used when a row has no department at all).
 const DEPARTMENT_DONUT_MAX_SLICES = 8;
+const DEPARTMENT_DONUT_NON_FILTERABLE = new Set(['Andre', 'Ukjent']);
 
 function renderDepartmentDonut(avvikList) {
   const total = avvikList.length;
@@ -114,46 +128,55 @@ function renderDepartmentDonut(avvikList) {
     : top;
 
   const colorForIndex = (_label, i) => `hsl(${Math.round((i * 360) / Math.max(entries.length, 1))}, 60%, 55%)`;
-  const { segments, legend } = renderDonutParts(entries, total, colorForIndex, 'Ingen avvik registrert.');
+  const filterAttrs = (label) =>
+    DEPARTMENT_DONUT_NON_FILTERABLE.has(label)
+      ? ''
+      : ` data-filter-col="department" data-filter-value="${escapeHtml(label.toLowerCase())}"`;
+  const { segments, legend } = renderDonutParts(entries, total, colorForIndex, 'Ingen avvik registrert.', filterAttrs);
   return renderDonutCard('Fordeling per avdeling', 'Fordeling per avdeling', segments, legend);
 }
 
-function renderStats(avvikList) {
-  const open = avvikList.filter((a) => !a.resolved).length;
-  const resolved = avvikList.length - open;
-
+// openAvvikList is exactly what's shown in the "Åpne avvik" table below (see
+// splitAvvik) - the top-5/donuts here need to match it 1:1 so that clicking
+// into one of them filters that same table meaningfully. resolvedCount is
+// tracked separately since resolved avvik aren't part of that list at all.
+function renderStats(openAvvikList, resolvedCount) {
   const counts = new Map();
-  for (const a of avvikList) {
+  for (const a of openAvvikList) {
     counts.set(a.purchaserName, (counts.get(a.purchaserName) || 0) + 1);
   }
   const top5 = [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 5);
 
   const topList = top5.length
     ? top5
-        .map(([name, count]) => `<li>${escapeHtml(name || 'Ukjent')} — ${count} avvik</li>`)
+        .map(([name, count]) => {
+          // A blank/"Ukjent" name has nothing real to filter by - filtering
+          // by an empty value would just match every row (see applyFilters).
+          const filterAttrs = name
+            ? ` data-filter-col="purchaser" data-filter-value="${escapeHtml(name.toLowerCase())}"`
+            : '';
+          const cls = filterAttrs ? ' class="clickable"' : '';
+          return `<li${cls}${filterAttrs}>${escapeHtml(name || 'Ukjent')} — ${count} avvik</li>`;
+        })
         .join('')
     : '<li class="empty">Ingen avvik registrert.</li>';
 
   return `
   <div class="stats">
     <div class="bf-card"><div class="bf-card-content">
-      <div class="stat-number">${avvikList.length}</div>
+      <div class="stat-number">${openAvvikList.length}</div>
       <div class="stat-label">Avvik totalt</div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
-      <div class="stat-number">${open}</div>
-      <div class="stat-label">Antall åpne avvik</div>
-    </div></div>
-    <div class="bf-card"><div class="bf-card-content">
-      <div class="stat-number">${resolved}</div>
+      <div class="stat-number">${resolvedCount}</div>
       <div class="stat-label">Antall løst</div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
       <div class="stat-label">Topp 5 — flest avvik</div>
       <ol class="top-list">${topList}</ol>
     </div></div>
-    ${renderTypeDonut(avvikList)}
-    ${renderDepartmentDonut(avvikList)}
+    ${renderTypeDonut(openAvvikList)}
+    ${renderDepartmentDonut(openAvvikList)}
   </div>`;
 }
 
@@ -271,7 +294,6 @@ function renderSidebar(activeKey) {
   return `
   <aside class="sidebar">
     <div class="brand">Lager-avvik</div>
-    <div class="brand-sub">En nettside laget av Finance</div>
     <nav><ul>${links}</ul></nav>
   </aside>`;
 }
@@ -418,6 +440,21 @@ const SHARED_SCRIPT = `
         el.addEventListener('input', applyFilters);
         el.addEventListener('change', applyFilters);
       });
+    });
+    // Clicking a name in "Topp 5", a donut legend entry, or a donut segment
+    // sets the matching filter box on the open-avvik list and re-runs its
+    // existing filter logic (above) via a plain input event - no separate
+    // filtering logic needed here.
+    document.querySelectorAll('[data-filter-col]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const input = document.querySelector(
+          '#open-section .filter-input[data-col="' + el.dataset.filterCol + '"]'
+        );
+        if (!input) return;
+        input.value = el.dataset.filterValue;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
     });`;
 
 const SHARED_STYLE = `
@@ -425,14 +462,13 @@ const SHARED_STYLE = `
   body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; display: flex; min-height: 100vh; }
   h1, h2, h3 { font-family: var(--font-satoshi, Satoshi), "Segoe UI", sans-serif; }
   .sidebar { width: 17rem; flex-shrink: 0; background: var(--bfc-base-2); border-right: var(--bf-border); padding: var(--bfs24) var(--bfs16); position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; }
-  .sidebar .brand { font-weight: 700; font-size: var(--bf-font-size-l); color: #fff; }
-  .sidebar .brand-sub { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); margin: var(--bfs4) 0 var(--bfs24); }
+  .sidebar .brand { font-weight: 700; font-size: var(--bf-font-size-h2); color: #fff; margin-bottom: var(--bfs24); }
   .sidebar nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
   .sidebar nav a { display: block; padding: var(--bfs8) var(--bfs12); border-radius: var(--bf-radius-s); color: var(--bfc-base-c); text-decoration: none; font-size: var(--bf-font-size-m); }
   .sidebar nav a:hover { background: var(--bfc-base-3); }
   .sidebar nav a.active { background: var(--bfc-theme); color: var(--bfc-theme-c, #fff); font-weight: 600; }
   .main { flex: 1 1 auto; min-width: 0; }
-  .page { max-width: 96rem; margin: 0 auto; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
+  .page { max-width: none; margin: 0; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
   .page-header { margin-bottom: var(--bfs32); }
   .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
   .toolbar { margin-top: var(--bfs16); display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
@@ -470,10 +506,13 @@ const SHARED_STYLE = `
   .donut-legend li { display: flex; align-items: center; gap: var(--bfs8); padding: var(--bfs2) 0; }
   .donut-legend li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
   .legend-swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: var(--bf-radius-full); flex-shrink: 0; }
+  .clickable { cursor: pointer; }
+  li.clickable:hover, .top-list li.clickable:hover { text-decoration: underline; }
+  circle.clickable:hover { opacity: 0.8; }
   .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
   .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }`;
 
-function renderShell(activeKey, title, contentHtml) {
+function renderShell(activeKey, title, contentHtml, { showToolbar } = {}) {
   return `<!DOCTYPE html>
 <html lang="no" data-bf-color-mode="dark">
 <head>
@@ -489,7 +528,7 @@ function renderShell(activeKey, title, contentHtml) {
       <header class="page-header">
         <span class="bf-badge bfc-attn-bg">Under arbeid</span>
         <h1>${escapeHtml(title)}</h1>
-        ${renderToolbar()}
+        ${showToolbar ? renderToolbar() : ''}
       </header>
       ${contentHtml}
     </div>
@@ -500,11 +539,11 @@ function renderShell(activeKey, title, contentHtml) {
 }
 
 function renderOpenAvvikPage(avvikList, notifications) {
-  const { open } = splitAvvik(avvikList);
+  const { open, resolved } = splitAvvik(avvikList);
   const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
 
   const content = `
-    ${renderStats(avvikList)}
+    ${renderStats(open, resolved.length)}
 
     <section id="open-section">
       <div class="section-header">
@@ -532,7 +571,7 @@ function renderOpenAvvikPage(avvikList, notifications) {
       </div>
     </section>`;
 
-  return renderShell('open', 'Åpne avvik', content);
+  return renderShell('open', 'Åpne avvik', content, { showToolbar: true });
 }
 
 function renderFinancePage(avvikList, notifications) {
