@@ -50,7 +50,26 @@ async function fetchAvvikRows() {
       .input('mainCutoff', sql.Date, MAIN_TABLE_CUTOFF_DATE)
       .input('ticketsCutoff', sql.Date, TICKETS_CUTOFF_DATE)
       .query(`
-        WITH SupplierOrderLines AS
+        WITH EarliestReceiptByOrderArticle AS
+        (
+            /* "Mottak" = en lagerbevegelse med positiv quantity, for samme
+            bestillingsnummer (order_number) og artikkelnummer (article_number)
+            som ordrelinjen. Dager siden mottak regnes fra den TIDLIGSTE slike
+            bevegelsen (samme logikk som den opprinnelige "Dager ventende"-
+            målingen: MIN(dato) WHERE Antall > 0). En ordrelinje uten noen
+            match her er ikke mottatt ennå, og skal dermed ikke telles/vises. */
+            SELECT
+                sh.order_number COLLATE Danish_Norwegian_CI_AS AS order_number,
+                sh.article_number COLLATE Danish_Norwegian_CI_AS AS article_number,
+                MIN(sh.date_of_movement) AS earliest_receipt_at
+            FROM [dwh].[workplace].[stock_history] AS sh
+            WHERE sh.quantity > 0
+            GROUP BY
+                sh.order_number COLLATE Danish_Norwegian_CI_AS,
+                sh.article_number COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        SupplierOrderLines AS
         (
             SELECT
                 sol.*,
@@ -75,17 +94,23 @@ async function fetchAvvikRows() {
 
                 DATEDIFF(
                     DAY,
-                    CAST(sol.order_date AS date),
+                    CAST(er.earliest_receipt_at AS date),
                     CAST(GETDATE() AS date)
                 ) AS days_waiting
 
             FROM [dwh].[finance].[supplier_order_line] AS sol
 
+            INNER JOIN EarliestReceiptByOrderArticle AS er
+                ON er.order_number
+                 = sol.supplier_order_number COLLATE Danish_Norwegian_CI_AS
+               AND er.article_number
+                 = sol.article_number COLLATE Danish_Norwegian_CI_AS
+
             WHERE sol.order_status = 3030
               AND sol.order_date >= @mainCutoff
               AND DATEDIFF(
                       DAY,
-                      CAST(sol.order_date AS date),
+                      CAST(er.earliest_receipt_at AS date),
                       CAST(GETDATE() AS date)
                   ) > 21
         ),
@@ -648,44 +673,6 @@ async function fetchAvvikRows() {
             WHERE rt.ticket_rank = 1
         ),
 
-        /* Velger siste lagerbevegelse per ordrenummer og lot_number */
-        RankedStockHistory AS
-        (
-            SELECT
-                sh.*,
-
-                ROW_NUMBER() OVER
-                (
-                    PARTITION BY
-                        sh.order_number,
-                        sh.lot_number
-                    ORDER BY
-                        sh.date_of_movement DESC,
-                        sh.last_updated_at DESC,
-                        sh.unique_number DESC
-                ) AS stock_rank,
-
-                COUNT(*) OVER
-                (
-                    PARTITION BY
-                        sh.order_number,
-                        sh.lot_number
-                ) AS stock_movement_count
-
-            FROM [dwh].[workplace].[stock_history] AS sh
-            WHERE sh.order_number IS NOT NULL
-        ),
-
-        LatestStockHistory AS
-        (
-            SELECT
-                rsh.order_number,
-                rsh.lot_number
-
-            FROM RankedStockHistory AS rsh
-            WHERE rsh.stock_rank = 1
-        ),
-
         Combined AS
         (
             SELECT
@@ -822,11 +809,6 @@ async function fetchAvvikRows() {
             LEFT JOIN PreferredTicket AS pt
                 ON pt.po_number COLLATE Danish_Norwegian_CI_AS
                  = sol.po_number COLLATE Danish_Norwegian_CI_AS
-
-            LEFT JOIN LatestStockHistory AS lsh
-                ON lsh.order_number COLLATE Danish_Norwegian_CI_AS
-                 = sol.supplier_order_number COLLATE Danish_Norwegian_CI_AS
-               AND lsh.lot_number = sol.lot_number
         )
 
         SELECT
