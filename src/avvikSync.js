@@ -34,6 +34,9 @@ async function syncAvvikFromDwh() {
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
   );
+  const departmentByFullName = new Map(
+    intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.department])
+  );
   const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
 
   const avvikRows = [];
@@ -43,12 +46,18 @@ async function syncAvvikFromDwh() {
 
     const purchaserName = row.case_owner || null;
     const purchaserEmail = resolvePurchaserEmail(purchaserName, emailByFullName);
+    // Fallback: when department_number doesn't resolve to a name, use the
+    // resolved sakseier's own department from intility_users instead.
+    const department =
+      departmentNameByNumber.get(row.department_number) ||
+      departmentByFullName.get(normalizeFullNameForMatching(purchaserName)) ||
+      null;
 
     avvikRows.push({
       id: buildSyntheticId(row),
       orderId: row.supplier_order_number,
       articleNumber: row.article_number,
-      department: departmentNameByNumber.get(row.department_number) || null,
+      department,
       purchaserName,
       purchaserEmail,
       discrepancyType,

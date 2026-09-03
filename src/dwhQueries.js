@@ -324,6 +324,7 @@ async function fetchAvvikRows() {
                 t.ticket_title,
                 t.ticket_status,
                 t.ticket_status_english,
+                t.customer_fullname,
                 t.category_name,
                 t.category_top_level,
                 t.classification_name,
@@ -352,6 +353,7 @@ async function fetchAvvikRows() {
                 ts.ticket_title,
                 ts.ticket_status,
                 ts.ticket_status_english,
+                ts.customer_fullname,
                 ts.category_name,
                 ts.category_top_level,
                 ts.classification_name,
@@ -404,6 +406,14 @@ async function fetchAvvikRows() {
                 tt.*,
 
                 CASE
+                    -- Størst fokus: en "Bestilling"-ticket med en tildelt
+                    -- saksbehandler slår alle andre kriterier.
+                    WHEN tt.customer_fullname COLLATE Danish_Norwegian_CI_AS
+                         = 'Bestilling' COLLATE Danish_Norwegian_CI_AS
+                     AND tt.intility_worker_fullname COLLATE Danish_Norwegian_CI_AS
+                         > '0' COLLATE Danish_Norwegian_CI_AS
+                        THEN 0
+
                     WHEN NULLIF(
                              LTRIM(RTRIM(tt.intility_worker_fullname)),
                              ''
@@ -511,6 +521,13 @@ async function fetchAvvikRows() {
 
                     ORDER BY
                         CASE
+                            WHEN tt.customer_fullname COLLATE Danish_Norwegian_CI_AS
+                                 = 'Bestilling' COLLATE Danish_Norwegian_CI_AS
+                             AND tt.intility_worker_fullname
+                                    COLLATE Danish_Norwegian_CI_AS
+                                 > '0' COLLATE Danish_Norwegian_CI_AS
+                                THEN 0
+
                             WHEN NULLIF(
                                      LTRIM(RTRIM(tt.intility_worker_fullname)),
                                      ''
@@ -832,10 +849,13 @@ async function fetchAvvikRows() {
 
 // Employee directory, used to look up an email address for a resolved
 // purchaser full name (case_owner from fetchAvvikRows).
+// department is also selected here as a fallback department source: some
+// order lines have no department_number match, but the resolved sakseier's
+// own department (see avvikSync.js) fills most of those gaps.
 async function fetchIntilityUsers() {
   return withPool(async (pool) => {
     const result = await pool.request().query(`
-      SELECT user_full_name, email
+      SELECT user_full_name, email, department
       FROM [dwh].[dbo].[intility_users]
     `);
     return result.recordset;
