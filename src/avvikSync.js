@@ -47,8 +47,11 @@ async function syncAvvikFromDwh() {
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.department])
   );
   const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
-  const mediusLinkByKey = new Map(
-    mediusLinks.map((m) => [buildMediusLinkKey(m.visma_purchase_order, m.article_code, m.supplier_id), m.medius_link])
+  const mediusInfoByKey = new Map(
+    mediusLinks.map((m) => [
+      buildMediusLinkKey(m.visma_purchase_order, m.article_code, m.supplier_id),
+      { invoiceNumber: m.invoice_number, mediusLink: m.medius_link },
+    ])
   );
 
   const avvikRows = [];
@@ -65,21 +68,24 @@ async function syncAvvikFromDwh() {
       departmentByFullName.get(normalizeFullNameForMatching(purchaserName)) ||
       departmentNameByNumber.get(row.department_number) ||
       null;
-    const mediusLink =
-      mediusLinkByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) || null;
+    const mediusInfo = mediusInfoByKey.get(
+      buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)
+    );
 
     avvikRows.push({
       id: buildSyntheticId(row),
       orderId: row.supplier_order_number,
       articleNumber: row.article_number,
       poNumber: row.po_number,
+      lotNumber: row.lot_number,
       department,
       purchaserName,
       purchaserEmail,
       discrepancyType,
       createdAt: toIso(row.order_date),
       daysWaiting: row.days_waiting,
-      mediusLink,
+      invoiceNumber: mediusInfo ? mediusInfo.invoiceNumber : null,
+      mediusLink: mediusInfo ? mediusInfo.mediusLink : null,
     });
   }
 

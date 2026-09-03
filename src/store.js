@@ -119,6 +119,8 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.orderId = fresh.orderId;
       existing.articleNumber = fresh.articleNumber;
       existing.poNumber = fresh.poNumber;
+      existing.lotNumber = fresh.lotNumber;
+      existing.invoiceNumber = fresh.invoiceNumber;
       existing.mediusLink = fresh.mediusLink;
       if (!existing.purchaserManuallySet) {
         existing.purchaserName = fresh.purchaserName;

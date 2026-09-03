@@ -909,6 +909,7 @@ async function fetchMediusLinks() {
         mil.visma_purchase_order,
         mil.article_code,
         mil.supplier_id,
+        mih.invoice_number,
         mih.medius_link
       FROM [dwh].[finance].[medius_invoice_lines] mil
       INNER JOIN [dwh].[finance].[medius_invoice_head] mih

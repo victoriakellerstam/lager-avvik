@@ -44,6 +44,8 @@ function renderDetailRow(a, colSpan) {
       <div class="detail-grid">
         <div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>
         <div><strong>SKU (artikkelnummer):</strong> ${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</div>
+        <div><strong>Partinummer:</strong> ${a.lotNumber ? escapeHtml(a.lotNumber) : '—'}</div>
+        <div><strong>Fakturanummer:</strong> ${a.invoiceNumber ? escapeHtml(a.invoiceNumber) : '—'}</div>
         <div>${mediusLinkHtml}</div>
       </div>
     </td></tr>`;
