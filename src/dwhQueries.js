@@ -937,10 +937,10 @@ async function fetchStockMovementSummaryByLot() {
       WITH RankedByLot AS
       (
           SELECT
-              sh.lot_number COLLATE Danish_Norwegian_CI_AS AS lot_number,
+              sh.lot_number,
               sh.stock_balance_per_date,
               ROW_NUMBER() OVER (
-                  PARTITION BY sh.lot_number COLLATE Danish_Norwegian_CI_AS
+                  PARTITION BY sh.lot_number
                   ORDER BY sh.date_of_movement DESC
               ) AS rn
           FROM [dwh].[workplace].[stock_history] AS sh
@@ -949,11 +949,11 @@ async function fetchStockMovementSummaryByLot() {
       ReceivedByLot AS
       (
           SELECT
-              sh.lot_number COLLATE Danish_Norwegian_CI_AS AS lot_number,
+              sh.lot_number,
               SUM(sh.quantity) AS total_received
           FROM [dwh].[workplace].[stock_history] AS sh
           WHERE sh.lot_number IS NOT NULL AND sh.quantity > 0
-          GROUP BY sh.lot_number COLLATE Danish_Norwegian_CI_AS
+          GROUP BY sh.lot_number
       )
       SELECT
           r.lot_number,
