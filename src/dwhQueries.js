@@ -923,4 +923,54 @@ async function fetchMediusLinks() {
   });
 }
 
-module.exports = { fetchAvvikRows, fetchIntilityUsers, fetchDepartments, fetchMediusLinks };
+// Videresolgt (resold) status per lot_number: an item is fully resold once
+// its running stock balance for that lot has reached 0 - a lot gets +quantity
+// on receipt and -quantity as it goes back out. latest_balance is the most
+// recent stock_balance_per_date for the lot (ROW_NUMBER by date_of_movement,
+// same "pick the latest row" pattern as EarliestReceiptByOrderArticle above,
+// just DESC instead of MIN); total_received is the sum of all positive
+// movements for the lot, used to tell "never received" apart from "partially
+// sold" once avvikSync.js compares the two.
+async function fetchStockMovementSummaryByLot() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      WITH RankedByLot AS
+      (
+          SELECT
+              sh.lot_number COLLATE Danish_Norwegian_CI_AS AS lot_number,
+              sh.stock_balance_per_date,
+              ROW_NUMBER() OVER (
+                  PARTITION BY sh.lot_number COLLATE Danish_Norwegian_CI_AS
+                  ORDER BY sh.date_of_movement DESC
+              ) AS rn
+          FROM [dwh].[workplace].[stock_history] AS sh
+          WHERE sh.lot_number IS NOT NULL
+      ),
+      ReceivedByLot AS
+      (
+          SELECT
+              sh.lot_number COLLATE Danish_Norwegian_CI_AS AS lot_number,
+              SUM(sh.quantity) AS total_received
+          FROM [dwh].[workplace].[stock_history] AS sh
+          WHERE sh.lot_number IS NOT NULL AND sh.quantity > 0
+          GROUP BY sh.lot_number COLLATE Danish_Norwegian_CI_AS
+      )
+      SELECT
+          r.lot_number,
+          r.stock_balance_per_date AS latest_balance,
+          rb.total_received
+      FROM RankedByLot AS r
+      INNER JOIN ReceivedByLot AS rb ON rb.lot_number = r.lot_number
+      WHERE r.rn = 1
+    `);
+    return result.recordset;
+  });
+}
+
+module.exports = {
+  fetchAvvikRows,
+  fetchIntilityUsers,
+  fetchDepartments,
+  fetchMediusLinks,
+  fetchStockMovementSummaryByLot,
+};

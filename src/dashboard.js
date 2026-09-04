@@ -2,7 +2,7 @@
 
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
-const { KOSTNADSFAKTURA_REVERSER } = require('./discrepancyTypes');
+const { KOSTNADSFAKTURA_REVERSER, MANUELL_ORDRE } = require('./discrepancyTypes');
 
 function escapeHtml(value) {
   return String(value)
@@ -43,12 +43,19 @@ function renderDetailRow(a, colSpan) {
   const ticketUrlHtml = a.ticketUrl
     ? `<a class="bf-link" href="${escapeHtml(a.ticketUrl)}" target="_blank" rel="noopener noreferrer">Vis saken</a>`
     : '<span class="section-note">Ingen sak funnet for denne linjen.</span>';
+  // Manuelle ordre har ingen PO-nummer i det hele tatt - vis ikke feltet for
+  // denne typen i stedet for en tom "—".
+  const poNumberHtml =
+    a.discrepancyType === MANUELL_ORDRE
+      ? ''
+      : `<div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>`;
   return `<tr class="detail-row" hidden><td colspan="${colSpan}">
       <div class="detail-grid">
-        <div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>
+        ${poNumberHtml}
         <div><strong>SKU (artikkelnummer):</strong> ${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</div>
         <div><strong>Partinummer:</strong> ${a.lotNumber ? escapeHtml(a.lotNumber) : '—'}</div>
         <div><strong>Fakturanummer:</strong> ${a.invoiceNumber ? escapeHtml(a.invoiceNumber) : '—'}</div>
+        <div><strong>Videresolgt:</strong> ${a.resoldStatus ? escapeHtml(a.resoldStatus) : '—'}</div>
         <div>${mediusLinkHtml}</div>
         <div>${ticketUrlHtml}</div>
       </div>

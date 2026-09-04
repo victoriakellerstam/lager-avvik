@@ -123,6 +123,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.invoiceNumber = fresh.invoiceNumber;
       existing.mediusLink = fresh.mediusLink;
       existing.ticketUrl = fresh.ticketUrl;
+      existing.resoldStatus = fresh.resoldStatus;
       if (!existing.purchaserManuallySet) {
         existing.purchaserName = fresh.purchaserName;
         existing.purchaserEmail = fresh.purchaserEmail;

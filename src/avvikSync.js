@@ -22,6 +22,20 @@ function buildMediusLinkKey(poNumber, articleNumber, supplierIdText) {
   return [poNumber, articleNumber, supplierIdText].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
 
+// 'Ja' once the lot's latest stock balance has reached 0 (everything that
+// came in has since gone back out); 'Nei' while the balance still sits at
+// (or above) everything ever received (nothing has gone out yet); 'Delvis'
+// for anything in between. No summary row for the lot at all (never
+// received, or no lot_number on this order line) means unknown, not 'Nei'.
+function resolveResoldStatus(lotNumber, summaryByLot) {
+  const summary = summaryByLot.get(String(lotNumber ?? '').trim().toLowerCase());
+  if (!summary) return null;
+  const { latestBalance, totalReceived } = summary;
+  if (latestBalance <= 0) return 'Ja';
+  if (latestBalance >= totalReceived) return 'Nei';
+  return 'Delvis';
+}
+
 /**
  * Runs one full dwh -> avvik refresh: dwhQueries.js's fetchAvvikRows query
  * does the actual classification and purchaser resolution in SQL (see
@@ -39,6 +53,7 @@ async function syncAvvikFromDwh() {
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
   const departments = await dwhQueries.fetchDepartments();
   const mediusLinks = await dwhQueries.fetchMediusLinks();
+  const stockMovementByLot = await dwhQueries.fetchStockMovementSummaryByLot();
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
@@ -51,6 +66,12 @@ async function syncAvvikFromDwh() {
     mediusLinks.map((m) => [
       buildMediusLinkKey(m.visma_purchase_order, m.article_code, m.supplier_id),
       { invoiceNumber: m.invoice_number, mediusLink: m.medius_link },
+    ])
+  );
+  const stockSummaryByLot = new Map(
+    stockMovementByLot.map((s) => [
+      String(s.lot_number ?? '').trim().toLowerCase(),
+      { latestBalance: s.latest_balance, totalReceived: s.total_received },
     ])
   );
 
@@ -87,6 +108,7 @@ async function syncAvvikFromDwh() {
       daysWaiting: row.days_waiting,
       invoiceNumber: mediusInfo ? mediusInfo.invoiceNumber : null,
       mediusLink: mediusInfo ? mediusInfo.mediusLink : null,
+      resoldStatus: resolveResoldStatus(row.lot_number, stockSummaryByLot),
     });
   }
 
