@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { mapDeviationScenario } = require('../src/scenario');
 const {
+  AVVIK_REVERSERING_TEST,
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
@@ -16,6 +17,7 @@ const {
 } = require('../src/discrepancyTypes');
 
 test('mapDeviationScenario: each real SQL deviation_scenario value maps to its app-level discrepancyType', () => {
+  assert.equal(mapDeviationScenario('Avvik reversering test'), AVVIK_REVERSERING_TEST);
   assert.equal(mapDeviationScenario('Internbestilling'), INTERNBESTILLING);
   assert.equal(mapDeviationScenario('Manuell ordre'), MANUELL_ORDRE);
   assert.equal(mapDeviationScenario('Kredittkort lisenskjøp, feilaktig mottak'), KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT);

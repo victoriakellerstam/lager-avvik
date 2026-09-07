@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  AVVIK_REVERSERING_TEST,
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
@@ -19,6 +20,8 @@ const {
 // Internbestilling's text is intentionally just "..." - the user hasn't
 // decided what should go there yet.
 const INSTRUCTIONS = {
+  [AVVIK_REVERSERING_TEST]:
+    'Prosjektnummer 14000/11246, men fakturaen er arkivert som en varefaktura via PO - sjekk om dette faktisk er en reversering (ikke en vanlig internbestilling) og korriger bokføringen om nødvendig',
   [IKKE_MOTTATT_FAKTURA_I_MEDIUS]:
     'Ingen faktura i Medius - send oppdatering til Finance om fakturanummer eller hør med distributør om hva som er status på faktura',
   [INTERNBESTILLING]: '...',

@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  AVVIK_REVERSERING_TEST,
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
@@ -24,6 +25,7 @@ const {
 // buckets, per the same simplification agreed with the user for the
 // previous JS-side implementation.
 const DEVIATION_SCENARIO_TO_DISCREPANCY_TYPE = new Map([
+  ['Avvik reversering test', AVVIK_REVERSERING_TEST],
   ['Internbestilling', INTERNBESTILLING],
   ['Manuell ordre', MANUELL_ORDRE],
   ['Kredittkort lisenskjøp, feilaktig mottak', KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT],

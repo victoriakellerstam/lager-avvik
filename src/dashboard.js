@@ -265,11 +265,11 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
 // The status column shows the actual discrepancyType badge (not a generic
-// Åpen/Løst) since this table now also holds Kostnadsfaktura — reverser
-// cases alongside genuine Spesielle caser - Finance ones.
+// Åpen/Løst) since this table now also holds Kostnadsfaktura — reverser and
+// Avvik reversering test cases alongside genuine Spesielle caser - Finance ones.
 function renderFinanceRow(a) {
   return `
-    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
@@ -481,7 +481,7 @@ const SHARED_SCRIPT = `
     });
     // Each section with a filter row is scoped independently, so identically-
     // named filter boxes in different sections/pages don't clobber each other.
-    document.querySelectorAll('#open-section, #no-owner-section, details.archive').forEach((section) => {
+    document.querySelectorAll('#open-section, #finance-section, #no-owner-section, details.archive').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
       // Only #open-section has a matching stat card - null elsewhere, and
       // every use below is guarded on it.
@@ -697,16 +697,24 @@ function renderFinancePage(avvikList, notifications) {
   const content = `
     ${renderFinanceStats(financeCases.length, noOwnerCases.length)}
 
-    <section>
+    <section id="finance-section">
       <div class="section-header">
         <h2>Spesielle caser - Finance</h2>
         <span class="bf-badge bfc-theme-bg">${financeCases.length}</span>
       </div>
-      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det.</p>
+      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det. «Avvik reversering test» er samme betingelse, avgrenset til prosjektnummer 14000/11246, for å undersøke om disse egentlig er reverseringer og ikke vanlige internbestillinger.</p>
       <div class="section-card">
         <table class="bf-table">
           <thead>
             <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Kommentarer</th><th></th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+            </tr>
           </thead>
           <tbody>${financeRows}</tbody>
         </table>

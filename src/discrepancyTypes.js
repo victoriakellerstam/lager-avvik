@@ -7,6 +7,7 @@
 // them would silently fall through to a default badge/steps/routing instead
 // of erroring, which matters once discrepancyType starts coming from a real
 // data pipeline (src/scenario.js) instead of a human typing a literal.
+const AVVIK_REVERSERING_TEST = 'Avvik reversering test';
 const IKKE_MOTTATT_FAKTURA_I_MEDIUS = 'Ikke mottatt faktura i Medius';
 const INTERNBESTILLING = 'Internbestilling';
 const KOSTNADSFAKTURA_REVERSER = 'Kostnadsfaktura — reverser';
@@ -18,6 +19,7 @@ const SPESIELLE_CASER_FINANCE = 'Spesielle caser - Finance';
 const VAREFAKTURA_UNDER_BEHANDLING = 'Varefaktura — under behandling';
 
 const ALL_DISCREPANCY_TYPES = [
+  AVVIK_REVERSERING_TEST,
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
@@ -30,6 +32,7 @@ const ALL_DISCREPANCY_TYPES = [
 ];
 
 module.exports = {
+  AVVIK_REVERSERING_TEST,
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
