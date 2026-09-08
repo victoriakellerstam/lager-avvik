@@ -1,7 +1,6 @@
 'use strict';
 
 const {
-  AVVIK_REVERSERING_TEST,
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
@@ -17,9 +16,6 @@ const {
 // discrepancy type badge, roughly matching the internal scenario reference.
 // An unlisted type falls back to "neutral".
 const BADGE_CLASS = {
-  // Diagnostisk/undersøkende status - samme grå som standard-fallback, men
-  // eksplisitt satt for å vise at det er et bevisst valg, ikke en glemt type.
-  [AVVIK_REVERSERING_TEST]: 'neutral',
   [IKKE_MOTTATT_FAKTURA_I_MEDIUS]: 'warning',
   [INTERNBESTILLING]: 'brand',
   [KOSTNADSFAKTURA_REVERSER]: 'alert',

@@ -265,8 +265,8 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
 // The status column shows the actual discrepancyType badge (not a generic
-// Åpen/Løst) since this table now also holds Kostnadsfaktura — reverser and
-// Avvik reversering test cases alongside genuine Spesielle caser - Finance ones.
+// Åpen/Løst) since this table now also holds Kostnadsfaktura — reverser
+// cases alongside genuine Spesielle caser - Finance ones.
 function renderFinanceRow(a) {
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
@@ -274,6 +274,7 @@ function renderFinanceRow(a) {
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
+      <td>${typeof a.daysWaiting === 'number' ? a.daysWaiting : '—'}</td>
       <td>
         <details>
           <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
@@ -286,7 +287,7 @@ function renderFinanceRow(a) {
         </details>
       </td>
       <td>${a.resolved ? '' : `<button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button>`}</td>
-    </tr>${renderDetailRow(a, 6)}`;
+    </tr>${renderDetailRow(a, 7)}`;
 }
 
 // The two literal fallback names dwhQueries.js's ground-truth query produces
@@ -573,8 +574,9 @@ const SHARED_STYLE = `
   .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
   .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
   .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: var(--bfc-base-c); }
-  .stat-label { color: var(--bfc-base-c); font-size: var(--bf-font-size-s); }
+  .stat-label { color: var(--bfc-base-c); font-size: var(--bf-font-size-l); font-weight: 600; }
   .stat-sublabel { color: var(--bfc-base-c); font-size: var(--bf-font-size-s); margin-top: var(--bfs4); opacity: 0.85; }
+  .bf-card-title { font-size: var(--bf-font-size-l); font-weight: 600; color: var(--bfc-base-c); }
   .top-list-card { min-width: 20rem; flex: 1 1 20rem; }
   .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-m); color: var(--bfc-base-c); }
   .top-list li { break-inside: avoid; }
@@ -702,16 +704,17 @@ function renderFinancePage(avvikList, notifications) {
         <h2>Spesielle caser - Finance</h2>
         <span class="bf-badge bfc-theme-bg">${financeCases.length}</span>
       </div>
-      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det. «Avvik reversering test» er samme betingelse, avgrenset til prosjektnummer 14000/11246, for å undersøke om disse egentlig er reverseringer og ikke vanlige internbestillinger.</p>
+      <p class="section-note">En varefaktura (ikke kostnadsfaktura) matchet på PO-nummer + artikkel som er arkivert i Medius, men linjen står likevel som et åpent avvik (&gt;21 dager). Altså: fakturaen er ferdigbehandlet/arkivert, men noe stemmer ikke siden ordren fortsatt vises som avvik — Finance må se nærmere på det.</p>
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Kommentarer</th><th></th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th><th></th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
               <th></th>
               <th></th>
             </tr>

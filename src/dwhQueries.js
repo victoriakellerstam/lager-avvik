@@ -749,21 +749,8 @@ async function fetchAvvikRows() {
                 er en annen, urelatert "Internbestilling status"-kolonne i
                 kildemodellen, ikke en del av selve klassifiseringen (bekreftet
                 via konkrete ordre-eksempler som ellers feilklassifiseres).
-
-                Unntak (diagnostisk, "Avvik reversering test"): en delmengde av
-                prosjektnummer 14000/11246-ordrene er egentlig en varefaktura
-                (ikke kostnadsfaktura) som er arkivert via PO - samme betingelse
-                som ellers gir "Spesielle caser - Finance" lenger ned. Disse
-                skal undersøkes som en mulig reversering, ikke gjemmes bak
-                Internbestilling-etiketten, så denne sjekken må ligge FØR
-                prosjektnummer-sjekken.
                 */
                 CASE
-                    WHEN sol.project_number IN (14000, 11246)
-                     AND COALESCE(mam.is_cost_invoice_via_po, 0) = 0
-                     AND COALESCE(mam.is_goods_archived_via_po, 0) = 1
-                        THEN 'Avvik reversering test'
-
                     WHEN sol.project_number = 14000
                         THEN 'Internbestilling'
 
