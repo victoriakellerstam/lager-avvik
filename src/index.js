@@ -7,7 +7,7 @@ const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
 const { syncAvvikFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
-const { renderOpenAvvikPage, renderFinancePage, renderArchivePage } = require('./dashboard');
+const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, ASSET_CSS, ASSET_JS } = require('./dashboard');
 
 const PORT = process.env.PORT || 8080;
 
@@ -65,6 +65,19 @@ function createServer() {
     try {
       if (req.method === 'GET' && pathname === '/health') {
         return sendJson(res, 200, { status: 'ok' });
+      }
+
+      // ?v=<hash> in the shell's <link>/<script> tags (see dashboard.js's
+      // ASSET_CSS_VERSION/ASSET_JS_VERSION) means the URL itself changes
+      // whenever the content does, so this can be cached aggressively.
+      if (req.method === 'GET' && pathname === '/assets/app.css') {
+        res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'public, max-age=31536000, immutable' });
+        return res.end(ASSET_CSS);
+      }
+
+      if (req.method === 'GET' && pathname === '/assets/app.js') {
+        res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=31536000, immutable' });
+        return res.end(ASSET_JS);
       }
 
       // Rendered before writing headers in all three routes below - if

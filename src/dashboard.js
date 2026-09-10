@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
 const { KOSTNADSFAKTURA_REVERSER, MANUELL_ORDRE } = require('./discrepancyTypes');
@@ -313,21 +314,61 @@ function splitAvvik(avvikList) {
 }
 
 const NAV_ITEMS = [
-  { key: 'open', href: '/', label: 'Åpne avvik' },
-  { key: 'finance', href: '/finance', label: 'Saker som løses av Finance' },
-  { key: 'archive', href: '/arkiv', label: 'Arkiv' },
+  { key: 'open', href: '/', label: 'Åpne avvik', icon: 'fa-list-check' },
+  { key: 'finance', href: '/finance', label: 'Saker som løses av Finance', icon: 'fa-coins' },
+  { key: 'archive', href: '/arkiv', label: 'Arkiv', icon: 'fa-box-archive' },
 ];
 
-function renderSidebar(activeKey) {
-  const links = NAV_ITEMS.map(
-    (item) =>
-      `<li><a href="${item.href}"${item.key === activeKey ? ' class="active" aria-current="page"' : ''}>${item.label}</a></li>`
-  ).join('');
+function renderSkipLink() {
+  return `<a class="skip-link" href="#main-content">Hopp til innhold</a>`;
+}
+
+function renderTopBar() {
   return `
-  <aside class="sidebar">
-    <div class="brand">Lager-avvik</div>
-    <nav><ul>${links}</ul></nav>
-  </aside>`;
+  <header class="topbar">
+    <div class="topbar-left">
+      <button type="button" id="nav-toggle" class="icon-button" aria-expanded="false" aria-controls="side-nav" aria-label="Åpne meny">
+        <i class="fa-solid fa-bars" aria-hidden="true"></i>
+      </button>
+      <span class="topbar-brand"><i class="fa-solid fa-warehouse" aria-hidden="true"></i>Lager-avvik</span>
+    </div>
+    <button type="button" id="settings-toggle" class="icon-button" aria-expanded="false" aria-controls="settings-panel" aria-label="Innstillinger">
+      <i class="fa-solid fa-gear" aria-hidden="true"></i>
+    </button>
+  </header>`;
+}
+
+function renderSideNav(activeKey) {
+  const links = NAV_ITEMS.map((item) => {
+    const isActive = item.key === activeKey;
+    return `<li>
+      <a href="${item.href}"${isActive ? ' class="active" aria-current="page"' : ''}>
+        <i class="fa-solid ${item.icon}${isActive ? ' active-icon' : ''}" aria-hidden="true"></i>
+        <span>${item.label}</span>
+      </a>
+    </li>`;
+  }).join('');
+  return `
+  <nav id="side-nav" class="side-nav" aria-label="Hovedmeny"><ul>${links}</ul></nav>
+  <div id="nav-backdrop" class="nav-backdrop" hidden></div>`;
+}
+
+function renderSettingsPanel() {
+  return `
+  <div id="settings-panel" class="settings-panel" role="dialog" aria-modal="true" aria-label="Innstillinger" hidden>
+    <div class="settings-panel-header">
+      <span class="bf-card-title">Innstillinger</span>
+      <button type="button" id="settings-close" class="icon-button" aria-label="Lukk innstillinger">
+        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+      </button>
+    </div>
+    <fieldset class="settings-group">
+      <legend>Fargemodus</legend>
+      <label class="bf-radio"><input type="radio" name="color-mode" value="dark"><span>Mørk</span></label>
+      <label class="bf-radio"><input type="radio" name="color-mode" value="light"><span>Lys</span></label>
+      <label class="bf-radio"><input type="radio" name="color-mode" value="system"><span>Følg systeminnstilling</span></label>
+    </fieldset>
+  </div>`;
 }
 
 function renderToolbar() {
@@ -342,22 +383,106 @@ function renderToolbar() {
 }
 
 const SHARED_SCRIPT = `
+    // Side nav: docked-collapse on wide screens (>=960px), overlay drawer on
+    // narrow ones. 'nav-collapsed' on <body> means the same thing at both
+    // breakpoints (sidebar hidden/width 0), so aria-expanded below is never
+    // inverted - only the overlay case adds focus trapping/backdrop, since
+    // the wide-screen case is a plain layout collapse, not a modal.
     (function () {
-      const themeToggle = document.getElementById('theme-toggle');
-      if (!themeToggle) return;
-      function updateLabel() {
-        const mode = document.documentElement.getAttribute('data-bf-color-mode') || 'dark';
-        themeToggle.textContent = mode === 'light' ? 'Mørk modus' : 'Lys modus';
+      const navToggle = document.getElementById('nav-toggle');
+      const sideNav = document.getElementById('side-nav');
+      const backdrop = document.getElementById('nav-backdrop');
+      if (!navToggle || !sideNav || !backdrop) return;
+      const isOverlayMode = () => !window.matchMedia('(min-width: 960px)').matches;
+      const isVisible = () => !document.body.classList.contains('nav-collapsed');
+
+      // Desktop starts docked/visible, mobile starts off-canvas/collapsed -
+      // correct the server-rendered aria-expanded="false" to match whichever
+      // is actually true before any click happens.
+      if (isOverlayMode()) {
+        document.body.classList.add('nav-collapsed');
+      } else {
+        navToggle.setAttribute('aria-expanded', 'true');
+        navToggle.setAttribute('aria-label', 'Lukk meny');
       }
-      updateLabel();
-      themeToggle.addEventListener('click', () => {
-        const current = document.documentElement.getAttribute('data-bf-color-mode') || 'dark';
-        const next = current === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-bf-color-mode', next);
-        try { localStorage.setItem('bfColorMode', next); } catch (e) {}
-        updateLabel();
+
+      function showNav() {
+        document.body.classList.remove('nav-collapsed');
+        navToggle.setAttribute('aria-expanded', 'true');
+        navToggle.setAttribute('aria-label', 'Lukk meny');
+        if (isOverlayMode()) {
+          backdrop.hidden = false;
+          const firstLink = sideNav.querySelector('a');
+          if (firstLink) firstLink.focus();
+        }
+      }
+      function hideNav({ returnFocus } = { returnFocus: true }) {
+        document.body.classList.add('nav-collapsed');
+        navToggle.setAttribute('aria-expanded', 'false');
+        navToggle.setAttribute('aria-label', 'Åpne meny');
+        backdrop.hidden = true;
+        if (returnFocus) navToggle.focus();
+      }
+      navToggle.addEventListener('click', () => {
+        if (isVisible()) hideNav();
+        else showNav();
+      });
+      backdrop.addEventListener('click', () => hideNav());
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && isOverlayMode() && isVisible()) hideNav();
       });
     })();
+
+    // Settings panel: color-mode radios apply immediately (no Save button).
+    // 'system' means neither override class is present, so Bifrost's own
+    // prefers-color-scheme handling takes over.
+    (function () {
+      const settingsToggle = document.getElementById('settings-toggle');
+      const panel = document.getElementById('settings-panel');
+      const closeBtn = document.getElementById('settings-close');
+      if (!settingsToggle || !panel || !closeBtn) return;
+      const radios = panel.querySelectorAll('input[name="color-mode"]');
+
+      function currentMode() {
+        try { return localStorage.getItem('bfColorMode') || 'dark'; } catch (e) { return 'dark'; }
+      }
+      function applyMode(mode) {
+        document.documentElement.classList.remove('bf-darkmode', 'bf-lightmode');
+        if (mode === 'dark') document.documentElement.classList.add('bf-darkmode');
+        else if (mode === 'light') document.documentElement.classList.add('bf-lightmode');
+        try { localStorage.setItem('bfColorMode', mode); } catch (e) {}
+      }
+      function openPanel() {
+        const mode = currentMode();
+        radios.forEach((r) => { r.checked = r.value === mode; });
+        panel.hidden = false;
+        settingsToggle.setAttribute('aria-expanded', 'true');
+        const firstRadio = panel.querySelector('input[name="color-mode"]');
+        if (firstRadio) firstRadio.focus();
+      }
+      function closePanel({ returnFocus } = { returnFocus: true }) {
+        panel.hidden = true;
+        settingsToggle.setAttribute('aria-expanded', 'false');
+        if (returnFocus) settingsToggle.focus();
+      }
+      settingsToggle.addEventListener('click', () => {
+        if (panel.hidden) openPanel();
+        else closePanel();
+      });
+      closeBtn.addEventListener('click', () => closePanel());
+      document.addEventListener('click', (e) => {
+        if (!panel.hidden && !panel.contains(e.target) && e.target !== settingsToggle && !settingsToggle.contains(e.target)) {
+          closePanel({ returnFocus: false });
+        }
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !panel.hidden) closePanel();
+      });
+      radios.forEach((radio) => {
+        radio.addEventListener('change', () => { if (radio.checked) applyMode(radio.value); });
+      });
+    })();
+
     // Clicking anywhere on an avvik row that isn't itself interactive
     // toggles a hidden detail row (PO-nummer, SKU, Medius-lenke) right below it.
     document.querySelectorAll('.avvik-row').forEach((row) => {
@@ -536,15 +661,53 @@ const SHARED_SCRIPT = `
 
 const SHARED_STYLE = `
   * { box-sizing: border-box; }
-  body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; display: flex; min-height: 100vh; }
+  body { font-family: var(--font-open-sans, "Open Sans"), "Segoe UI", sans-serif; margin: 0; display: flex; flex-direction: column; min-height: 100vh; }
   h1, h2, h3 { font-family: var(--font-satoshi, Satoshi), "Segoe UI", sans-serif; }
-  .sidebar { width: 17rem; flex-shrink: 0; background: var(--bfc-base-2); border-right: var(--bf-border); padding: var(--bfs24) var(--bfs16); position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; }
-  .sidebar .brand { font-weight: 700; font-size: var(--bf-font-size-h2); color: var(--bfc-base-c); margin-bottom: var(--bfs24); }
-  .sidebar nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
-  .sidebar nav a { display: block; padding: var(--bfs8) var(--bfs12); border-radius: var(--bf-radius-s); color: var(--bfc-base-c); text-decoration: none; font-size: var(--bf-font-size-m); }
-  .sidebar nav a:hover { background: var(--bfc-base-3); }
-  .sidebar nav a.active { background: var(--bfc-theme); color: var(--bfc-theme-c, #fff); font-weight: 600; }
-  .main { flex: 1 1 auto; min-width: 0; }
+
+  .skip-link { position: absolute; left: var(--bfs16); top: -3rem; background: var(--bfc-base-3); color: var(--bfc-base-c); padding: var(--bfs8) var(--bfs16); border-radius: var(--bf-radius-s); z-index: 100; transition: top 0.15s ease; }
+  .skip-link:focus { top: var(--bfs16); }
+
+  .topbar { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--bfs16); padding: var(--bfs16); background: var(--bfc-base-2); border-bottom: var(--bf-border); }
+  .topbar-left { display: flex; align-items: center; gap: var(--bfs12); }
+  .topbar-brand { display: flex; align-items: center; gap: var(--bfs8); font-weight: 700; font-size: var(--bf-font-size-h2); color: var(--bfc-base-c); }
+  .icon-button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0; border: none; background: transparent; color: var(--bfc-base-c); border-radius: var(--bf-radius-s); cursor: pointer; font-size: var(--bf-font-size-l); }
+  .icon-button:hover { background: var(--bfc-theme-fade); }
+
+  .body-row { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  .side-nav { width: 17rem; flex-shrink: 0; background: var(--bfc-base-2); border-right: var(--bf-border); padding: var(--bfs24) var(--bfs16); overflow-y: auto; overflow-x: hidden; transition: width 0.15s ease, padding 0.15s ease; }
+  .side-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
+  .side-nav a { display: flex; align-items: center; gap: var(--bfs12); min-height: 44px; padding: var(--bfs8) var(--bfs12); border-radius: var(--bf-radius-s); color: var(--bfc-base-c); text-decoration: none; font-size: var(--bf-font-size-m); white-space: nowrap; }
+  .side-nav a i { width: 1.1em; text-align: center; color: var(--bfc-base-c-dimmed); }
+  .side-nav a i.active-icon { color: var(--bfc-theme); }
+  .side-nav a:hover { background: var(--bfc-theme-fade); }
+  .side-nav a.active { background: var(--bfc-shadow); font-weight: 600; }
+
+  .nav-backdrop { display: none; }
+
+  /* 'nav-collapsed' on <body> means "sidebar hidden" at both breakpoints.
+     Wide screens: side nav is a docked column by default; collapsing it
+     takes it to width 0 and .main fills the freed-up space. Narrow screens:
+     side nav is off-canvas by default (a fixed overlay drawer over a
+     --bfc-shadow backdrop) and slides in when NOT collapsed. */
+  @media (min-width: 960px) {
+    body.nav-collapsed .side-nav { width: 0; padding-left: 0; padding-right: 0; border-right: none; }
+  }
+  @media (max-width: 959px) {
+    .side-nav { position: fixed; top: 0; left: 0; height: 100vh; width: 17rem; transform: translateX(-100%); transition: transform 0.15s ease; z-index: 40; }
+    body:not(.nav-collapsed) .side-nav { transform: translateX(0); }
+    .nav-backdrop { display: block; position: fixed; inset: 0; background: var(--bfc-shadow); z-index: 30; }
+    .nav-backdrop[hidden] { display: none; }
+  }
+
+  .settings-panel { position: fixed; top: 4.5rem; right: var(--bfs16); width: 18rem; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-m); box-shadow: 0 4px 12px var(--bfc-shadow); padding: var(--bfs16); z-index: 50; }
+  .settings-panel[hidden] { display: none; }
+  .settings-panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--bfs16); }
+  .settings-group { border: none; padding: 0; margin: 0 0 var(--bfs16); }
+  .settings-group legend { font-size: var(--bf-font-size-s); color: var(--bfc-base-c-dimmed); margin-bottom: var(--bfs8); padding: 0; }
+  .settings-group .bf-radio { display: flex; align-items: center; gap: var(--bfs8); min-height: 44px; }
+
+  .main { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
   .page { max-width: none; margin: 0; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
   .page-header { margin-bottom: var(--bfs32); }
   .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
@@ -556,7 +719,7 @@ const SHARED_STYLE = `
   .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
   .section-header h2 { margin: 0; }
   .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
-  .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+  .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px var(--bfc-shadow); }
   .section-card .bf-table { margin: 0; }
   details.archive > summary { font-size: var(--bf-font-size-l); font-weight: 600; }
   details.archive .section-card { margin-top: var(--bfs16); }
@@ -572,7 +735,7 @@ const SHARED_STYLE = `
   .preview-email { margin-top: var(--bfs8); }
   .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
   .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
-  .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }
+  .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px var(--bfc-shadow); }
   .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: var(--bfc-base-c); }
   .stat-label { color: var(--bfc-base-c); font-size: var(--bf-font-size-l); font-weight: 600; }
   .stat-sublabel { color: var(--bfc-base-c); font-size: var(--bf-font-size-s); margin-top: var(--bfs4); opacity: 0.85; }
@@ -592,47 +755,63 @@ const SHARED_STYLE = `
   circle.clickable:hover { opacity: 0.8; }
   .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
   .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
-  .theme-toggle-btn { position: fixed; top: var(--bfs16); right: var(--bfs16); z-index: 50; }
   .avvik-row { cursor: pointer; }
   .detail-row td { background: var(--bfc-base-2); padding: var(--bfs16); }
   .detail-grid { display: flex; gap: var(--bfs32); flex-wrap: wrap; font-size: var(--bf-font-size-s); }`;
 
 // Runs before the stylesheet/body so a stored preference applies with no
-// flash of the server-rendered default (dark) on load.
+// flash of the server-rendered default (dark) on load. 'system' stores/adds
+// neither override class, leaving Bifrost's own prefers-color-scheme
+// handling in charge.
 const THEME_RESTORE_SCRIPT = `
   (function () {
+    var stored = 'dark';
     try {
-      var stored = localStorage.getItem('bfColorMode');
-      if (stored === 'light' || stored === 'dark') {
-        document.documentElement.setAttribute('data-bf-color-mode', stored);
-      }
+      var saved = localStorage.getItem('bfColorMode');
+      if (saved === 'light' || saved === 'dark' || saved === 'system') stored = saved;
     } catch (e) {}
+    if (stored === 'dark') document.documentElement.classList.add('bf-darkmode');
+    else if (stored === 'light') document.documentElement.classList.add('bf-lightmode');
   })();`;
+
+// Content-hashed so the URL itself changes whenever SHARED_STYLE/SHARED_SCRIPT
+// do - browsers always fetch fresh content on the next deploy, with no need
+// for anyone to hard-refresh (see the /assets routes in index.js).
+const ASSET_CSS = SHARED_STYLE;
+const ASSET_JS = SHARED_SCRIPT;
+const ASSET_CSS_VERSION = crypto.createHash('sha256').update(ASSET_CSS).digest('hex').slice(0, 10);
+const ASSET_JS_VERSION = crypto.createHash('sha256').update(ASSET_JS).digest('hex').slice(0, 10);
 
 function renderShell(activeKey, title, contentHtml, { showToolbar } = {}) {
   return `<!DOCTYPE html>
-<html lang="no" data-bf-color-mode="dark">
+<html lang="no" class="bf-theme-purple">
 <head>
 <meta charset="utf-8">
 <script>${THEME_RESTORE_SCRIPT}</script>
 <title>${escapeHtml(title)} — Lager-avvik</title>
 <link rel="stylesheet" href="https://unpkg.com/@intility/bifrost-css@6.11.2/dist/bifrost-all.css">
-<style>${SHARED_STYLE}</style>
+<link rel="stylesheet" href="/assets/app.css?v=${ASSET_CSS_VERSION}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.0/js/solid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.0/js/fontawesome.min.js"></script>
 </head>
 <body>
-  <button type="button" id="theme-toggle" class="bf-button theme-toggle-btn"></button>
-  ${renderSidebar(activeKey)}
-  <main class="main">
-    <div class="page">
-      <header class="page-header">
-        <span class="bf-badge bfc-attn-bg">Under arbeid</span>
-        <h1>${escapeHtml(title)}</h1>
-        ${showToolbar ? renderToolbar() : ''}
-      </header>
-      ${contentHtml}
-    </div>
-  </main>
-  <script>${SHARED_SCRIPT}</script>
+  ${renderSkipLink()}
+  ${renderTopBar()}
+  <div class="body-row">
+    ${renderSideNav(activeKey)}
+    <main id="main-content" class="main">
+      <div class="page">
+        <header class="page-header">
+          <span class="bf-badge bfc-attn-bg">Under arbeid</span>
+          <h1>${escapeHtml(title)}</h1>
+          ${showToolbar ? renderToolbar() : ''}
+        </header>
+        ${contentHtml}
+      </div>
+    </main>
+  </div>
+  ${renderSettingsPanel()}
+  <script src="/assets/app.js?v=${ASSET_JS_VERSION}"></script>
 </body>
 </html>`;
 }
@@ -785,4 +964,13 @@ function renderArchivePage(avvikList, notifications) {
   return renderShell('archive', 'Arkiv', content);
 }
 
-module.exports = { renderOpenAvvikPage, renderFinancePage, renderArchivePage, escapeHtml };
+module.exports = {
+  renderOpenAvvikPage,
+  renderFinancePage,
+  renderArchivePage,
+  escapeHtml,
+  ASSET_CSS,
+  ASSET_JS,
+  ASSET_CSS_VERSION,
+  ASSET_JS_VERSION,
+};
