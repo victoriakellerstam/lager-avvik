@@ -7,7 +7,7 @@ const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
 const { syncAvvikFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
-const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, ASSET_CSS, ASSET_JS } = require('./dashboard');
+const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
 
 const PORT = process.env.PORT || 8080;
 
@@ -98,6 +98,18 @@ function createServer() {
 
       if (req.method === 'GET' && pathname === '/arkiv') {
         const html = renderArchivePage(store.listAvvik(), store.listNotifications());
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
+      const avvikDetailMatch = pathname.match(/^\/avvik\/([^/]+)$/);
+      if (req.method === 'GET' && avvikDetailMatch) {
+        const avvik = store.getAvvik(parseAvvikId(avvikDetailMatch[1]));
+        if (!avvik) {
+          res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          return res.end('<!DOCTYPE html><html lang="no"><body><p>Fant ikke avviket. <a href="/">Tilbake til Åpne avvik</a></p></body></html>');
+        }
+        const html = renderAvvikDetailPage(avvik);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
 const { KOSTNADSFAKTURA_REVERSER, MANUELL_ORDRE } = require('./discrepancyTypes');
+const { getAvvikDetailContent } = require('./avvikDetailContent');
 
 function escapeHtml(value) {
   return String(value)
@@ -37,7 +38,7 @@ function renderNotificationHistory(avvikId, notifications) {
 // that row that isn't itself interactive (see the .avvik-row click handler
 // in SHARED_SCRIPT). colSpan must match the number of <td>s the calling
 // row-renderer produces, or the table columns misalign.
-function renderDetailRow(a, colSpan) {
+function renderDetailRow(a, colSpan, { showAction } = {}) {
   const mediusLinkHtml = a.mediusLink
     ? `<a class="bf-link" href="${escapeHtml(a.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a>`
     : '<span class="section-note">Ingen Medius-lenke funnet for denne linjen.</span>';
@@ -50,8 +51,18 @@ function renderDetailRow(a, colSpan) {
     a.discrepancyType === MANUELL_ORDRE
       ? ''
       : `<div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>`;
+  // The primary action - placed before PO-nummer and styled distinctly
+  // (border + theme color, not the bf-button-filled variant, since a page
+  // can have several rows expanded and Bifrost only allows one filled
+  // button per page) so it reads as the main thing to do with this row.
+  const actionHtml = showAction
+    ? `<div class="detail-action"><a class="bf-button action-primary" href="/avvik/${encodeURIComponent(a.id)}">
+        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Dette må gjøres
+      </a></div>`
+    : '';
   return `<tr class="detail-row" hidden><td colspan="${colSpan}">
       <div class="detail-grid">
+        ${actionHtml}
         ${poNumberHtml}
         <div><strong>SKU (artikkelnummer):</strong> ${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</div>
         <div><strong>Partinummer:</strong> ${a.lotNumber ? escapeHtml(a.lotNumber) : '—'}</div>
@@ -261,7 +272,7 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
         <button type="button" class="bf-button bf-button-small preview-email" data-id="${a.id}">Vis e-posteksempel</button>
         <pre class="email-preview" data-id="${a.id}" hidden></pre>
       </td>
-    </tr>${renderDetailRow(a, 9)}`;
+    </tr>${renderDetailRow(a, 9, { showAction: true })}`;
 }
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
@@ -480,6 +491,22 @@ const SHARED_SCRIPT = `
       });
       radios.forEach((radio) => {
         radio.addEventListener('change', () => { if (radio.checked) applyMode(radio.value); });
+      });
+    })();
+
+    // Back link on the avvik detail page: prefer history.back() so the
+    // browser restores the previous "Åpne avvik" page (filters, sort,
+    // scroll position) from its own cache, rather than a fresh server
+    // render with everything reset. Falls back to the plain href="/" when
+    // there's no history to go back to (e.g. the page was opened directly).
+    (function () {
+      const backLink = document.getElementById('back-link');
+      if (!backLink) return;
+      backLink.addEventListener('click', (e) => {
+        if (window.history.length > 1) {
+          e.preventDefault();
+          window.history.back();
+        }
       });
     })();
 
@@ -757,7 +784,23 @@ const SHARED_STYLE = `
   .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
   .avvik-row { cursor: pointer; }
   .detail-row td { background: var(--bfc-base-2); padding: var(--bfs16); }
-  .detail-grid { display: flex; gap: var(--bfs32); flex-wrap: wrap; font-size: var(--bf-font-size-s); }`;
+  .detail-grid { display: flex; gap: var(--bfs32); flex-wrap: wrap; font-size: var(--bf-font-size-s); }
+  /* Full-width so it reads as the primary action, not just another field in
+     the flex row, and always the first thing (see renderDetailRow). */
+  .detail-action { flex: 1 1 100%; order: -1; }
+  .action-primary { border: 2px solid var(--bfc-theme); color: var(--bfc-theme); font-weight: 600; }
+  .action-primary:hover { background: var(--bfc-theme-fade); }
+
+  .back-link { display: inline-flex; align-items: center; gap: var(--bfs8); min-height: 44px; color: var(--bfc-base-c); text-decoration: none; margin-bottom: var(--bfs16); }
+  .back-link:hover { text-decoration: underline; }
+  .info-cards { display: flex; gap: var(--bfs16); flex-wrap: wrap; margin-bottom: var(--bfs32); }
+  .info-card { min-width: 10rem; }
+  .info-card .stat-label { font-size: var(--bf-font-size-s); }
+  .info-card .stat-value { font-size: var(--bf-font-size-l); font-weight: 700; color: var(--bfc-base-c); }
+  .detail-page-section { margin-top: var(--bfs32); }
+  .detail-page-section h2 { font-size: var(--bf-font-size-l); margin: 0 0 var(--bfs12); }
+  .detail-page-section .bf-card-content { font-size: var(--bf-font-size-m); line-height: 1.6; }
+  .order-data-grid { display: flex; gap: var(--bfs24); flex-wrap: wrap; font-size: var(--bf-font-size-s); }`;
 
 // Runs before the stylesheet/body so a stored preference applies with no
 // flash of the server-rendered default (dark) on load. 'system' stores/adds
@@ -933,6 +976,94 @@ function renderFinancePage(avvikList, notifications) {
   return renderShell('finance', 'Saker som løses av Finance', content);
 }
 
+// value === 0 is a real value (e.g. "0 dager ventende"), so this checks for
+// null/undefined/empty-string specifically rather than falsiness in general
+// - see renderInfoCard/renderOrderDataField below.
+function hasValue(value) {
+  return value !== null && value !== undefined && value !== '';
+}
+
+function renderInfoCard(label, value) {
+  if (!hasValue(value)) return '';
+  return `
+    <div class="bf-card info-card"><div class="bf-card-content">
+      <div class="stat-label">${escapeHtml(label)}</div>
+      <div class="stat-value">${escapeHtml(String(value))}</div>
+    </div></div>`;
+}
+
+function renderOrderDataField(label, value) {
+  if (!hasValue(value)) return '';
+  return `<div><strong>${escapeHtml(label)}:</strong> ${escapeHtml(String(value))}</div>`;
+}
+
+// Detail page for a single avvik/ordrelinje, reached from "Dette må gjøres"
+// on the open-avvik row panel (see renderDetailRow). Info cards, order data,
+// and links all hide themselves rather than rendering an empty
+// card/field/placeholder when a value is missing.
+function renderAvvikDetailPage(avvik) {
+  const { summary, procedure, links } = getAvvikDetailContent(avvik);
+
+  const infoCards = [
+    renderInfoCard('PO-nummer', avvik.poNumber),
+    renderInfoCard('Innkjøpsordre / bestillingsnummer', avvik.orderId),
+    renderInfoCard('SKU / artikkelnummer', avvik.articleNumber),
+    renderInfoCard('Type avvik', avvik.discrepancyType),
+    renderInfoCard('Sakseier', avvik.purchaserName),
+    renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null),
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const mediusLinkHtml = avvik.mediusLink
+    ? `<div><a class="bf-link" href="${escapeHtml(avvik.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a></div>`
+    : '';
+  const ticketUrlHtml = avvik.ticketUrl
+    ? `<div><a class="bf-link" href="${escapeHtml(avvik.ticketUrl)}" target="_blank" rel="noopener noreferrer">Vis saken</a></div>`
+    : '';
+  const orderData = [
+    renderOrderDataField('Partinummer', avvik.lotNumber),
+    renderOrderDataField('Fakturanummer', avvik.invoiceNumber),
+    renderOrderDataField('Videresolgt', avvik.resoldStatus),
+    mediusLinkHtml,
+    ticketUrlHtml,
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const linksHtml = links
+    .map(
+      (link) =>
+        `<a class="bf-button" href="${escapeHtml(link.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(link.label)}</a>`
+    )
+    .join('');
+
+  const content = `
+    <a id="back-link" class="back-link" href="/"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Åpne avvik</a>
+
+    <div class="info-cards">${infoCards}</div>
+
+    <section class="detail-page-section">
+      <h2>Sammendrag</h2>
+      <div class="bf-card"><div class="bf-card-content">${escapeHtml(summary)}</div></div>
+    </section>
+
+    ${orderData ? `<section class="detail-page-section">
+      <h2>Ordredata</h2>
+      <div class="bf-card"><div class="bf-card-content"><div class="order-data-grid">${orderData}</div></div></div>
+    </section>` : ''}
+
+    <section class="detail-page-section">
+      <h2>Anbefalt fremgangsmåte</h2>
+      <div class="bf-card"><div class="bf-card-content">
+        <p style="margin-top: 0;">${escapeHtml(procedure)}</p>
+        ${linksHtml}
+      </div></div>
+    </section>`;
+
+  return renderShell('open', `Avvik ${avvik.orderId}`, content);
+}
+
 function renderArchivePage(avvikList, notifications) {
   const { resolved } = splitAvvik(avvikList);
   const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
@@ -968,6 +1099,7 @@ module.exports = {
   renderOpenAvvikPage,
   renderFinancePage,
   renderArchivePage,
+  renderAvvikDetailPage,
   escapeHtml,
   ASSET_CSS,
   ASSET_JS,
