@@ -687,7 +687,10 @@ const SHARED_SCRIPT = `
     // sets the matching filter box on the open-avvik list and re-runs its
     // existing filter logic (above) via a plain input event - no separate
     // filtering logic needed here. Clicking the same value again clears it
-    // (toggle), rather than just re-setting the same filter.
+    // (toggle), rather than just re-setting the same filter. A new selection
+    // always replaces whatever filter (click-driven or typed) was active
+    // before, rather than combining with it, so every other filter-input is
+    // cleared first.
     document.querySelectorAll('[data-filter-col]').forEach((el) => {
       el.addEventListener('click', () => {
         const input = document.querySelector(
@@ -695,6 +698,9 @@ const SHARED_SCRIPT = `
         );
         if (!input) return;
         const alreadyActive = input.value.trim().toLowerCase() === el.dataset.filterValue;
+        document.querySelectorAll('#open-section .filter-input').forEach((otherInput) => {
+          if (otherInput !== input) otherInput.value = '';
+        });
         input.value = alreadyActive ? '' : el.dataset.filterValue;
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1078,7 +1084,7 @@ function renderProcedureSteps(procedure) {
 // icon links, and links all hide themselves rather than rendering an empty
 // card/field/placeholder when a value is missing.
 function renderAvvikDetailPage(avvik) {
-  const { summary, procedure, links } = getAvvikDetailContent(avvik);
+  const { procedure, links } = getAvvikDetailContent(avvik);
 
   // Every key figure shares the same discrepancyType status color (see
   // typeBadges.js - the same mapping already used for the type badge on the
@@ -1129,11 +1135,6 @@ function renderAvvikDetailPage(avvik) {
         ${renderProcedureSteps(procedure)}
         ${linksHtml}
       </div></div>
-    </section>
-
-    <section class="detail-page-section">
-      <h2>Sammendrag</h2>
-      <div class="bf-card"><div class="bf-card-content">${escapeHtml(summary)}</div></div>
     </section>`;
 
   const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} – Avvik – ${avvik.orderId}`;
