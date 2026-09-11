@@ -1,6 +1,8 @@
 'use strict';
 
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
 const store = require('./store');
 const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
@@ -10,6 +12,12 @@ const { startScheduler } = require('./scheduler');
 const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
 
 const PORT = process.env.PORT || 8080;
+
+// Logo icons for the avvik detail page's Medius/Ticket Manager links (see
+// dashboard.js's renderAvvikDetailPage) - read once at startup rather than
+// per-request, same idea as ASSET_CSS/ASSET_JS below.
+const MEDIUS_LOGO_PNG = fs.readFileSync(path.join(__dirname, 'assets', 'medius-logo.png'));
+const TICKET_MANAGER_LOGO_PNG = fs.readFileSync(path.join(__dirname, 'assets', 'ticket-manager-logo.png'));
 
 // Seed avvik ids are plain numbers; dwh-synced avvik ids are 16-char hex
 // strings (see avvikSync.js's buildSyntheticId) - store.getAvvik/resolveAvvik/
@@ -78,6 +86,16 @@ function createServer() {
       if (req.method === 'GET' && pathname === '/assets/app.js') {
         res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=31536000, immutable' });
         return res.end(ASSET_JS);
+      }
+
+      if (req.method === 'GET' && pathname === '/assets/medius-logo.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable' });
+        return res.end(MEDIUS_LOGO_PNG);
+      }
+
+      if (req.method === 'GET' && pathname === '/assets/ticket-manager-logo.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable' });
+        return res.end(TICKET_MANAGER_LOGO_PNG);
       }
 
       // Rendered before writing headers in all three routes below - if

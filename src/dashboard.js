@@ -223,7 +223,11 @@ function renderStats(openAvvikList, resolvedCount) {
   </div>`;
 }
 
-function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchaserForm }) {
+function renderAvvikRow(
+  a,
+  notifications,
+  { actionButton, dateField, showPurchaserForm, showSku, showDateColumn = true, showNotifiedColumn = true }
+) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
   const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
   let actionCell = '';
@@ -244,14 +248,32 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
     : a.purchaserName
       ? escapeHtml(a.purchaserName)
       : '—';
+  const skuCell = showSku ? `<td>${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</td>` : '';
+  const dateCell = showDateColumn ? `<td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>` : '';
+  const notifiedCell = showNotifiedColumn
+    ? `<td>
+        <details>
+          <summary class="bf-link">${timesNotified} ganger varslet på e-post</summary>
+          <ul class="notif-history">${renderNotificationHistory(a.id, notifications)}</ul>
+        </details>
+        <button type="button" class="bf-button bf-button-small preview-email" data-id="${a.id}">Vis e-posteksempel</button>
+        <pre class="email-preview" data-id="${a.id}" hidden></pre>
+      </td>`
+    : '';
+  // Base cells always present: order, purchaser, department, type badge,
+  // days waiting, comments - plus whichever optional cells are switched on
+  // above (sku/date/action/notified), so colSpan below always matches the
+  // actual number of <td>s regardless of which options this call passed.
+  const colSpan = 6 + (showSku ? 1 : 0) + (showDateColumn ? 1 : 0) + (actionCell ? 1 : 0) + (notifiedCell ? 1 : 0);
   return `
     <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
+      ${skuCell}
       <td>${purchaserCell}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
       <td>${typeof a.daysWaiting === 'number' ? a.daysWaiting : '—'}</td>
-      <td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>
+      ${dateCell}
       ${actionCell}
       <td>
         <details>
@@ -264,15 +286,8 @@ function renderAvvikRow(a, notifications, { actionButton, dateField, showPurchas
           </form>
         </details>
       </td>
-      <td>
-        <details>
-          <summary class="bf-link">${timesNotified} ganger varslet på e-post</summary>
-          <ul class="notif-history">${renderNotificationHistory(a.id, notifications)}</ul>
-        </details>
-        <button type="button" class="bf-button bf-button-small preview-email" data-id="${a.id}">Vis e-posteksempel</button>
-        <pre class="email-preview" data-id="${a.id}" hidden></pre>
-      </td>
-    </tr>${renderDetailRow(a, 9, { showAction: true })}`;
+      ${notifiedCell}
+    </tr>${renderDetailRow(a, colSpan, { showAction: true })}`;
 }
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
@@ -793,14 +808,41 @@ const SHARED_STYLE = `
 
   .back-link { display: inline-flex; align-items: center; gap: var(--bfs8); min-height: 44px; color: var(--bfc-base-c); text-decoration: none; margin-bottom: var(--bfs16); }
   .back-link:hover { text-decoration: underline; }
-  .info-cards { display: flex; gap: var(--bfs16); flex-wrap: wrap; margin-bottom: var(--bfs32); }
-  .info-card { min-width: 10rem; }
-  .info-card .stat-label { font-size: var(--bf-font-size-s); }
-  .info-card .stat-value { font-size: var(--bf-font-size-l); font-weight: 700; color: var(--bfc-base-c); }
+  /* Full page width, wrapping to as many rows as needed - each box picks a
+     Bifrost category color pair (solid border + same-palette tinted
+     background + matching contrast text) via its info-card-<tone> class, see
+     renderInfoCard. */
+  .info-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--bfs16); margin-bottom: var(--bfs32); }
+  .info-card { border-radius: var(--bf-radius-m); border-width: 2px; border-style: solid; }
+  .info-card .bf-card-content { padding: var(--bfs20); }
+  .info-card .stat-label { font-size: var(--bf-font-size-m); }
+  .info-card .stat-value { font-size: var(--bf-font-size-h3); font-weight: 700; margin-top: var(--bfs4); }
+  .info-card-theme { border-color: var(--bfc-theme); background: var(--bfc-theme-fade); }
+  .info-card-theme .stat-label, .info-card-theme .stat-value { color: var(--bfc-theme-fade-c); }
+  .info-card-success { border-color: var(--bfc-success); background: var(--bfc-success-fade); }
+  .info-card-success .stat-label, .info-card-success .stat-value { color: var(--bfc-success-fade-c); }
+  .info-card-warning { border-color: var(--bfc-warning); background: var(--bfc-warning-fade); }
+  .info-card-warning .stat-label, .info-card-warning .stat-value { color: var(--bfc-warning-fade-c); }
+  .info-card-attn { border-color: var(--bfc-attn); background: var(--bfc-attn-fade); }
+  .info-card-attn .stat-label, .info-card-attn .stat-value { color: var(--bfc-attn-fade-c); }
+  .info-card-alert { border-color: var(--bfc-alert); background: var(--bfc-alert-fade); }
+  .info-card-alert .stat-label, .info-card-alert .stat-value { color: var(--bfc-alert-fade-c); }
+  .info-card-chill { border-color: var(--bfc-chill); background: var(--bfc-chill-fade); }
+  .info-card-chill .stat-label, .info-card-chill .stat-value { color: var(--bfc-chill-fade-c); }
+  .info-card-brand { border-color: var(--bfc-brand); background: var(--bfc-brand-fade); }
+  .info-card-brand .stat-label, .info-card-brand .stat-value { color: var(--bfc-brand-fade-c); }
+  .info-card-neutral { border-color: var(--bfc-neutral); background: var(--bfc-neutral-fade); }
+  .info-card-neutral .stat-label, .info-card-neutral .stat-value { color: var(--bfc-neutral-fade-c); }
+  @media (max-width: 480px) {
+    .info-cards { grid-template-columns: 1fr; }
+  }
   .detail-page-section { margin-top: var(--bfs32); }
   .detail-page-section h2 { font-size: var(--bf-font-size-l); margin: 0 0 var(--bfs12); }
   .detail-page-section .bf-card-content { font-size: var(--bf-font-size-m); line-height: 1.6; }
-  .order-data-grid { display: flex; gap: var(--bfs24); flex-wrap: wrap; font-size: var(--bf-font-size-s); }`;
+  .external-logo-links { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
+  .external-logo-link { display: inline-flex; align-items: center; justify-content: center; width: 3rem; height: 3rem; border-radius: var(--bf-radius-m); border: var(--bf-border); background: var(--bfc-base-2); }
+  .external-logo-link:hover { background: var(--bfc-theme-fade); }
+  .external-logo-link img { width: 2rem; height: 2rem; object-fit: contain; }`;
 
 // Runs before the stylesheet/body so a stored preference applies with no
 // flash of the server-rendered default (dark) on load. 'system' stores/adds
@@ -861,7 +903,9 @@ function renderShell(activeKey, title, contentHtml, { showToolbar } = {}) {
 
 function renderOpenAvvikPage(avvikList, notifications) {
   const { open, resolved } = splitAvvik(avvikList);
-  const openRows = open.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt' })).join('');
+  const openRows = open
+    .map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', showSku: true, showDateColumn: false, showNotifiedColumn: false }))
+    .join('');
 
   const content = `
     ${renderStats(open, resolved.length)}
@@ -874,14 +918,13 @@ function renderOpenAvvikPage(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Sist varslet</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>SKU</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th></th><th>Kommentarer</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
-              <th></th>
-              <th></th>
               <th></th>
               <th></th>
               <th></th>
@@ -978,58 +1021,57 @@ function renderFinancePage(avvikList, notifications) {
 
 // value === 0 is a real value (e.g. "0 dager ventende"), so this checks for
 // null/undefined/empty-string specifically rather than falsiness in general
-// - see renderInfoCard/renderOrderDataField below.
+// - see renderInfoCard below.
 function hasValue(value) {
   return value !== null && value !== undefined && value !== '';
 }
 
-function renderInfoCard(label, value) {
+// tone picks one of Bifrost's category color pairs (--bfc-<tone> for the
+// border, --bfc-<tone>-fade/-fade-c for a same-palette tinted background with
+// a contrast-matched text color) so each key figure reads as its own clearly
+// bordered box rather than blending into the page background.
+function renderInfoCard(label, value, tone = 'neutral') {
   if (!hasValue(value)) return '';
   return `
-    <div class="bf-card info-card"><div class="bf-card-content">
+    <div class="bf-card info-card info-card-${tone}"><div class="bf-card-content">
       <div class="stat-label">${escapeHtml(label)}</div>
       <div class="stat-value">${escapeHtml(String(value))}</div>
     </div></div>`;
 }
 
-function renderOrderDataField(label, value) {
-  if (!hasValue(value)) return '';
-  return `<div><strong>${escapeHtml(label)}:</strong> ${escapeHtml(String(value))}</div>`;
-}
-
 // Detail page for a single avvik/ordrelinje, reached from "Dette må gjøres"
-// on the open-avvik row panel (see renderDetailRow). Info cards, order data,
-// and links all hide themselves rather than rendering an empty
-// card/field/placeholder when a value is missing.
+// on the open-avvik row panel (see renderDetailRow). Info cards, the external
+// links section, and links all hide themselves rather than rendering an
+// empty card/field/placeholder when a value is missing.
 function renderAvvikDetailPage(avvik) {
   const { summary, procedure, links } = getAvvikDetailContent(avvik);
 
   const infoCards = [
-    renderInfoCard('PO-nummer', avvik.poNumber),
-    renderInfoCard('Innkjøpsordre / bestillingsnummer', avvik.orderId),
-    renderInfoCard('SKU / artikkelnummer', avvik.articleNumber),
-    renderInfoCard('Type avvik', avvik.discrepancyType),
-    renderInfoCard('Sakseier', avvik.purchaserName),
-    renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null),
+    renderInfoCard('PO-nummer', avvik.poNumber, 'brand'),
+    renderInfoCard('Innkjøpsordre / bestillingsnummer', avvik.orderId, 'theme'),
+    renderInfoCard('SKU / artikkelnummer', avvik.articleNumber, 'chill'),
+    renderInfoCard('Type avvik', avvik.discrepancyType, getTypeBadgeClass(avvik.discrepancyType)),
+    renderInfoCard('Sakseier', avvik.purchaserName, 'success'),
+    renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, 'warning'),
+    renderInfoCard('Partinummer', avvik.lotNumber, 'attn'),
+    renderInfoCard('Videresolgt', avvik.resoldStatus, 'neutral'),
+    renderInfoCard('Fakturanummer', avvik.invoiceNumber, 'alert'),
   ]
     .filter(Boolean)
     .join('');
 
   const mediusLinkHtml = avvik.mediusLink
-    ? `<div><a class="bf-link" href="${escapeHtml(avvik.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a></div>`
+    ? `<a class="external-logo-link" href="${escapeHtml(avvik.mediusLink)}" target="_blank" rel="noopener noreferrer" title="Vis faktura i Medius" aria-label="Vis faktura i Medius">
+        <img src="/assets/medius-logo.png" alt="" width="32" height="32">
+      </a>`
     : '';
   const ticketUrlHtml = avvik.ticketUrl
-    ? `<div><a class="bf-link" href="${escapeHtml(avvik.ticketUrl)}" target="_blank" rel="noopener noreferrer">Vis saken</a></div>`
+    ? `<a class="external-logo-link" href="${escapeHtml(avvik.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="Vis saken i Ticket Manager" aria-label="Vis saken i Ticket Manager">
+        <img src="/assets/ticket-manager-logo.png" alt="" width="32" height="32">
+      </a>`
     : '';
-  const orderData = [
-    renderOrderDataField('Partinummer', avvik.lotNumber),
-    renderOrderDataField('Fakturanummer', avvik.invoiceNumber),
-    renderOrderDataField('Videresolgt', avvik.resoldStatus),
-    mediusLinkHtml,
-    ticketUrlHtml,
-  ]
-    .filter(Boolean)
-    .join('');
+  const externalLinksHtml =
+    mediusLinkHtml || ticketUrlHtml ? `<div class="external-logo-links">${mediusLinkHtml}${ticketUrlHtml}</div>` : '';
 
   const linksHtml = links
     .map(
@@ -1048,9 +1090,9 @@ function renderAvvikDetailPage(avvik) {
       <div class="bf-card"><div class="bf-card-content">${escapeHtml(summary)}</div></div>
     </section>
 
-    ${orderData ? `<section class="detail-page-section">
-      <h2>Ordredata</h2>
-      <div class="bf-card"><div class="bf-card-content"><div class="order-data-grid">${orderData}</div></div></div>
+    ${externalLinksHtml ? `<section class="detail-page-section">
+      <h2>Eksterne lenker</h2>
+      <div class="bf-card"><div class="bf-card-content">${externalLinksHtml}</div></div>
     </section>` : ''}
 
     <section class="detail-page-section">
@@ -1061,7 +1103,8 @@ function renderAvvikDetailPage(avvik) {
       </div></div>
     </section>`;
 
-  return renderShell('open', `Avvik ${avvik.orderId}`, content);
+  const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} Avvik ${avvik.orderId}`;
+  return renderShell('open', pageTitle, content);
 }
 
 function renderArchivePage(avvikList, notifications) {
