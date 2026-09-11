@@ -3,6 +3,7 @@
 const {
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
+  KOSTNADSFAKTURA_REVERSER,
   KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT,
   ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR,
   VAREFAKTURA_UNDER_BEHANDLING,
@@ -76,20 +77,30 @@ const DETAIL_CONTENT = {
   },
 };
 
-// Types with no dedicated variant here (the Finance-only types, handled on
-// their own page via renderFinanceRow, never reach this - but this stays
-// total rather than throwing, in case someone opens /avvik/:id directly for
-// one) fall back to instructions.js's per-type text, which already covers
-// every discrepancyType plus a default.
+// A fixed, always-true fact for a discrepancyType (not per-avvik data) shown
+// as its own box on the detail page (see dashboard.js's renderAvvikDetailPage)
+// - most types have none. Kostnadsfaktura — reverser always means Finance
+// already found a matching archived cost invoice; the box states that
+// up front rather than burying it in the procedure text.
+const DETAIL_NOTES = {
+  [KOSTNADSFAKTURA_REVERSER]: 'Det finnes en arkivert kostnadsfaktura på samme PO-nummer og leverandør i Medius.',
+};
+
+// Types with no dedicated variant here - including the Finance-only types,
+// reached via renderFinanceRow's "Mer informasjon" button - fall back to
+// instructions.js's per-type text, which already covers every
+// discrepancyType plus a default.
 function getAvvikDetailContent(avvik) {
   const entry = DETAIL_CONTENT[avvik.discrepancyType];
+  const note = DETAIL_NOTES[avvik.discrepancyType] || null;
   if (entry) {
-    return { summary: entry.summary(avvik), procedure: entry.procedure(avvik), links: entry.links };
+    return { summary: entry.summary(avvik), procedure: entry.procedure(avvik), links: entry.links, note };
   }
   return {
     summary: `Avviket er av typen «${avvik.discrepancyType}» og har ventet i ${avvik.daysWaiting ?? 'ukjent antall'} dager.`,
     procedure: getInstructions(avvik.discrepancyType),
     links: [],
+    note,
   };
 }
 

@@ -38,7 +38,7 @@ function renderNotificationHistory(avvikId, notifications) {
 // that row that isn't itself interactive (see the .avvik-row click handler
 // in SHARED_SCRIPT). colSpan must match the number of <td>s the calling
 // row-renderer produces, or the table columns misalign.
-function renderDetailRow(a, colSpan, { showAction } = {}) {
+function renderDetailRow(a, colSpan, { actionLabel } = {}) {
   const mediusLinkHtml = a.mediusLink
     ? `<a class="bf-link" href="${escapeHtml(a.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a>`
     : '<span class="section-note">Ingen Medius-lenke funnet for denne linjen.</span>';
@@ -55,9 +55,12 @@ function renderDetailRow(a, colSpan, { showAction } = {}) {
   // (border + theme color, not the bf-button-filled variant, since a page
   // can have several rows expanded and Bifrost only allows one filled
   // button per page) so it reads as the main thing to do with this row.
-  const actionHtml = showAction
+  // actionLabel differs by row type: "Dette må gjøres" for actionable
+  // open-avvik/no-owner rows, "Mer informasjon" for Finance-only rows (see
+  // renderAvvikRow/renderFinanceRow) - both link to the same detail page.
+  const actionHtml = actionLabel
     ? `<div class="detail-action"><a class="bf-button action-primary" href="/avvik/${encodeURIComponent(a.id)}">
-        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> Dette må gjøres
+        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> ${escapeHtml(actionLabel)}
       </a></div>`
     : '';
   return `<tr class="detail-row" hidden><td colspan="${colSpan}">
@@ -287,7 +290,7 @@ function renderAvvikRow(
         </details>
       </td>
       ${notifiedCell}
-    </tr>${renderDetailRow(a, colSpan, { showAction: true })}`;
+    </tr>${renderDetailRow(a, colSpan, { actionLabel: 'Dette må gjøres' })}`;
 }
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
@@ -314,7 +317,7 @@ function renderFinanceRow(a) {
         </details>
       </td>
       <td>${a.resolved ? '' : `<button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button>`}</td>
-    </tr>${renderDetailRow(a, 7)}`;
+    </tr>${renderDetailRow(a, 7, { actionLabel: 'Mer informasjon' })}`;
 }
 
 // The two literal fallback names dwhQueries.js's ground-truth query produces
@@ -851,10 +854,17 @@ const SHARED_STYLE = `
   .external-logo-link:hover { background: var(--bfc-theme-fade); }
   .external-logo-link:focus-visible { outline: 2px solid var(--bfc-theme); outline-offset: 2px; }
   .external-logo-link img { width: 2rem; height: 2rem; object-fit: contain; }
+  /* A fixed, always-true fact for this avvik's type (see avvikDetailContent.js's
+     DETAIL_NOTES) - a plain neutral card, distinct from the status-colored
+     info cards/procedure-card since it isn't itself a key figure or the
+     recommended action, just supporting context for it. */
+  .detail-note { margin-bottom: var(--bfs32); }
+  .detail-note .bf-card-content { display: flex; align-items: center; gap: var(--bfs12); font-size: var(--bf-font-size-m); }
+  .detail-note i { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-l); }
   /* The clearest primary message on the page: a larger heading, generous
      padding and a status-colored border (tone-border-<tone>, same avvik
      status color as the info cards) set it apart from the supporting
-     Sammendrag/nøkkeltall content around it (see renderAvvikDetailPage). The
+     nøkkeltall content around it (see renderAvvikDetailPage). The
      background stays neutral, matching the active theme. */
   .procedure-section { margin-top: var(--bfs48); }
   .procedure-section h2 { font-size: var(--bf-font-size-h2); margin: 0 0 var(--bfs16); }
@@ -1084,7 +1094,7 @@ function renderProcedureSteps(procedure) {
 // icon links, and links all hide themselves rather than rendering an empty
 // card/field/placeholder when a value is missing.
 function renderAvvikDetailPage(avvik) {
-  const { procedure, links } = getAvvikDetailContent(avvik);
+  const { procedure, links, note } = getAvvikDetailContent(avvik);
 
   // Every key figure shares the same discrepancyType status color (see
   // typeBadges.js - the same mapping already used for the type badge on the
@@ -1128,6 +1138,12 @@ function renderAvvikDetailPage(avvik) {
     <a id="back-link" class="back-link" href="/"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Åpne avvik</a>
 
     <div class="info-cards">${infoCards}</div>
+
+    ${note ? `<section class="detail-page-section">
+      <div class="bf-card detail-note"><div class="bf-card-content">
+        <i class="fa-solid fa-circle-info" aria-hidden="true"></i> ${escapeHtml(note)}
+      </div></div>
+    </section>` : ''}
 
     <section class="detail-page-section procedure-section">
       <h2>Anbefalt fremgangsmåte</h2>
