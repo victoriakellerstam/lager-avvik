@@ -65,6 +65,23 @@ test('Varefaktura under behandling: includes SKU, order id, and days waiting', (
   assert.match(procedure, /Medius/);
 });
 
+test('Varefaktura under behandling: with a known invoice deviation, the procedure names the actual deviation', () => {
+  const avvik = baseAvvik({
+    discrepancyType: VAREFAKTURA_UNDER_BEHANDLING,
+    articleNumber: 'ART-777',
+    invoiceDeviations: ['Quantity deviation'],
+  });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Antallet på fakturaen avviker fra innkjøpsordre for ART-777/);
+  assert.match(procedure, /legg igjen en kommentar i Medius/);
+});
+
+test('Varefaktura under behandling: with no known invoice deviation, falls back to the generic procedure', () => {
+  const avvik = baseAvvik({ discrepancyType: VAREFAKTURA_UNDER_BEHANDLING, invoiceDeviations: [] });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Gi Finance beskjed når eventuelle avvik på fakturaen er avklart/);
+});
+
 test('Ordre opprettet med feilaktig distributør: includes the Skriv ut-sak link', () => {
   const avvik = baseAvvik({ discrepancyType: ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR });
   const { summary, procedure, links } = getAvvikDetailContent(avvik);

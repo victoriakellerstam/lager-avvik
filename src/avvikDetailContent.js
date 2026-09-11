@@ -8,6 +8,7 @@ const {
   VAREFAKTURA_UNDER_BEHANDLING,
 } = require('./discrepancyTypes');
 const { getInstructions } = require('./instructions');
+const { describeInvoiceDeviations } = require('./invoiceDeviations');
 
 const TEAMS_CONTACT = 'Dersom du har spørsmål, kan du kontakte Finance på Teams.';
 
@@ -54,8 +55,16 @@ const DETAIL_CONTENT = {
   [VAREFAKTURA_UNDER_BEHANDLING]: {
     summary: (avvik) =>
       `Avviket gjelder ordrelinjen for SKU ${avvik.articleNumber} i innkjøpsordre ${avvik.orderId}. Det er ${avvik.daysWaiting} dager siden mottaket ble registrert.`,
-    procedure: () =>
-      `Fakturaen ligger åpen i Medius og må behandles. Gi Finance beskjed når eventuelle avvik på fakturaen er avklart. ${TEAMS_CONTACT}`,
+    // medius_order_deviations forteller nøyaktig hva som avviker mellom
+    // faktura og innkjøpsordre (antall/enhetspris/linjebeløp/totalbeløp) -
+    // når det er kjent, er det langt mer nyttig enn den generiske
+    // "gi beskjed når avklart"-teksten. Faller tilbake til den generiske
+    // teksten når ingen kjent deviation_name er funnet for linjen.
+    procedure: (avvik) => {
+      const deviationText = describeInvoiceDeviations(avvik.invoiceDeviations, avvik.articleNumber);
+      const action = deviationText || 'Gi Finance beskjed når eventuelle avvik på fakturaen er avklart.';
+      return `Fakturaen ligger åpen i Medius og må behandles. ${action} ${TEAMS_CONTACT}`;
+    },
     links: [],
   },
   [ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR]: {
