@@ -812,33 +812,25 @@ const SHARED_STYLE = `
 
   .back-link { display: inline-flex; align-items: center; gap: var(--bfs8); min-height: 44px; color: var(--bfc-base-c); text-decoration: none; margin-bottom: var(--bfs16); }
   .back-link:hover { text-decoration: underline; }
-  /* Full page width, wrapping to as many rows as needed - each box picks a
-     Bifrost category color pair (solid border + same-palette tinted
-     background + matching contrast text) via its info-card-<tone> class, see
-     renderInfoCard. */
-  .info-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: var(--bfs16); margin-bottom: var(--bfs32); }
-  .info-card { border-radius: var(--bf-radius-m); border-width: 2px; border-style: solid; }
-  .info-card .bf-card-content { padding: var(--bfs20); }
+  /* Each box's width follows its own content (no forced equal columns) and
+     wraps as needed; only the border carries the avvik's status color (see
+     renderInfoCard's info-card-<tone> class) - the background stays the
+     page's own neutral card background so it reads correctly in both themes. */
+  .info-cards { display: flex; flex-wrap: wrap; gap: var(--bfs16); margin-bottom: var(--bfs32); }
+  .info-card { border-radius: var(--bf-radius-m); border-width: 2px; border-style: solid; flex: 0 1 auto; }
+  .info-card .bf-card-content { padding: var(--bfs20); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 100%; }
   .info-card .stat-label { font-size: var(--bf-font-size-m); }
   .info-card .stat-value { font-size: var(--bf-font-size-h3); font-weight: 700; margin-top: var(--bfs4); }
-  .info-card-theme { border-color: var(--bfc-theme); background: var(--bfc-theme-fade); }
-  .info-card-theme .stat-label, .info-card-theme .stat-value { color: var(--bfc-theme-fade-c); }
-  .info-card-success { border-color: var(--bfc-success); background: var(--bfc-success-fade); }
-  .info-card-success .stat-label, .info-card-success .stat-value { color: var(--bfc-success-fade-c); }
-  .info-card-warning { border-color: var(--bfc-warning); background: var(--bfc-warning-fade); }
-  .info-card-warning .stat-label, .info-card-warning .stat-value { color: var(--bfc-warning-fade-c); }
-  .info-card-attn { border-color: var(--bfc-attn); background: var(--bfc-attn-fade); }
-  .info-card-attn .stat-label, .info-card-attn .stat-value { color: var(--bfc-attn-fade-c); }
-  .info-card-alert { border-color: var(--bfc-alert); background: var(--bfc-alert-fade); }
-  .info-card-alert .stat-label, .info-card-alert .stat-value { color: var(--bfc-alert-fade-c); }
-  .info-card-chill { border-color: var(--bfc-chill); background: var(--bfc-chill-fade); }
-  .info-card-chill .stat-label, .info-card-chill .stat-value { color: var(--bfc-chill-fade-c); }
-  .info-card-brand { border-color: var(--bfc-brand); background: var(--bfc-brand-fade); }
-  .info-card-brand .stat-label, .info-card-brand .stat-value { color: var(--bfc-brand-fade-c); }
-  .info-card-neutral { border-color: var(--bfc-neutral); background: var(--bfc-neutral-fade); }
-  .info-card-neutral .stat-label, .info-card-neutral .stat-value { color: var(--bfc-neutral-fade-c); }
+  .info-card-theme { border-color: var(--bfc-theme); }
+  .info-card-success { border-color: var(--bfc-success); }
+  .info-card-warning { border-color: var(--bfc-warning); }
+  .info-card-attn { border-color: var(--bfc-attn); }
+  .info-card-alert { border-color: var(--bfc-alert); }
+  .info-card-chill { border-color: var(--bfc-chill); }
+  .info-card-brand { border-color: var(--bfc-brand); }
+  .info-card-neutral { border-color: var(--bfc-neutral); }
   @media (max-width: 480px) {
-    .info-cards { grid-template-columns: 1fr; }
+    .info-card { flex: 1 1 100%; }
   }
   .detail-page-section { margin-top: var(--bfs32); }
   .detail-page-section h2 { font-size: var(--bf-font-size-l); margin: 0 0 var(--bfs12); }
@@ -1087,8 +1079,8 @@ function renderAvvikDetailPage(avvik) {
   const avvikTone = getTypeBadgeClass(avvik.discrepancyType);
   const infoCards = [
     renderInfoCard('PO-nummer', avvik.poNumber, avvikTone),
-    renderInfoCard('Innkjøpsordre / bestillingsnummer', avvik.orderId, avvikTone),
-    renderInfoCard('SKU / artikkelnummer', avvik.articleNumber, avvikTone),
+    renderInfoCard('Innkjøpsordrenummer', avvik.orderId, avvikTone),
+    renderInfoCard('SKU', avvik.articleNumber, avvikTone),
     renderInfoCard('Type avvik', avvik.discrepancyType, avvikTone),
     renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, avvikTone),
     renderInfoCard('Partinummer', avvik.lotNumber, avvikTone),
