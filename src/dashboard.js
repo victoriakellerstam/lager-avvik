@@ -1134,6 +1134,14 @@ function renderAvvikDetailPage(avvik) {
     )
     .join('');
 
+  // Kostnadsfaktura — reverser has nothing actionable to recommend (the note
+  // box above already says why it's resolved) - drop the section entirely.
+  // Spesielle caser - Finance gets the same box/list treatment but under
+  // "Informasjon" instead of "Anbefalt fremgangsmåte", since Finance handles
+  // it internally rather than following a suggested procedure.
+  const procedureHeading =
+    avvik.discrepancyType === KOSTNADSFAKTURA_REVERSER ? null : isFinanceCase(avvik.discrepancyType) ? 'Informasjon' : 'Anbefalt fremgangsmåte';
+
   const content = `
     <a id="back-link" class="back-link" href="/"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Åpne avvik</a>
 
@@ -1145,13 +1153,13 @@ function renderAvvikDetailPage(avvik) {
       </div></div>
     </section>` : ''}
 
-    <section class="detail-page-section procedure-section">
-      <h2>Anbefalt fremgangsmåte</h2>
+    ${procedureHeading ? `<section class="detail-page-section procedure-section">
+      <h2>${procedureHeading}</h2>
       <div class="bf-card procedure-card tone-border-${avvikTone}"><div class="bf-card-content">
         ${renderProcedureSteps(procedure)}
         ${linksHtml}
       </div></div>
-    </section>`;
+    </section>` : ''}`;
 
   const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} – Avvik – ${avvik.orderId}`;
   return renderShell('open', pageTitle, content, { headerActions });
