@@ -753,6 +753,10 @@ const SHARED_STYLE = `
   .page { max-width: none; margin: 0; padding: var(--bfs40) var(--bfs32) var(--bfs80); }
   .page-header { margin-bottom: var(--bfs32); }
   .page-header h1 { margin: var(--bfs8) 0 var(--bfs4); font-size: var(--bf-font-size-h1); }
+  /* Icon links (see renderAvvikDetailPage's headerActions) sit right beside
+     the h1 rather than in their own section, so they're immediately visible
+     alongside the case they belong to. */
+  .page-header-heading { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
   .toolbar { margin-top: var(--bfs16); display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
   .test-dwh-result { font-size: var(--bf-font-size-s); }
   .test-dwh-result.ok { color: var(--bfc-success); }
@@ -842,7 +846,22 @@ const SHARED_STYLE = `
   .external-logo-links { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
   .external-logo-link { display: inline-flex; align-items: center; justify-content: center; width: 3rem; height: 3rem; border-radius: var(--bf-radius-m); border: var(--bf-border); background: var(--bfc-base-2); }
   .external-logo-link:hover { background: var(--bfc-theme-fade); }
-  .external-logo-link img { width: 2rem; height: 2rem; object-fit: contain; }`;
+  .external-logo-link:focus-visible { outline: 2px solid var(--bfc-theme); outline-offset: 2px; }
+  .external-logo-link img { width: 2rem; height: 2rem; object-fit: contain; }
+  /* The clearest primary message on the page: a larger heading, generous
+     padding and a theme-colored accent set it apart from the supporting
+     Sammendrag/nøkkeltall content around it (see renderAvvikDetailPage). */
+  .procedure-section { margin-top: var(--bfs48); }
+  .procedure-section h2 { font-size: var(--bf-font-size-h2); margin: 0 0 var(--bfs16); }
+  .procedure-card { border: 2px solid var(--bfc-theme); background: var(--bfc-theme-fade); }
+  .procedure-card .bf-card-content { padding: var(--bfs32); }
+  .procedure-steps { margin: 0; padding-left: var(--bfs24); display: flex; flex-direction: column; gap: var(--bfs12); font-size: var(--bf-font-size-l); line-height: 1.7; color: var(--bfc-theme-fade-c); }
+  .procedure-card .bf-button { margin-top: var(--bfs16); }
+  @media (max-width: 480px) {
+    .procedure-section h2 { font-size: var(--bf-font-size-h3); }
+    .procedure-card .bf-card-content { padding: var(--bfs16); }
+    .procedure-steps { font-size: var(--bf-font-size-m); }
+  }`;
 
 // Runs before the stylesheet/body so a stored preference applies with no
 // flash of the server-rendered default (dark) on load. 'system' stores/adds
@@ -867,7 +886,7 @@ const ASSET_JS = SHARED_SCRIPT;
 const ASSET_CSS_VERSION = crypto.createHash('sha256').update(ASSET_CSS).digest('hex').slice(0, 10);
 const ASSET_JS_VERSION = crypto.createHash('sha256').update(ASSET_JS).digest('hex').slice(0, 10);
 
-function renderShell(activeKey, title, contentHtml, { showToolbar } = {}) {
+function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions } = {}) {
   return `<!DOCTYPE html>
 <html lang="no" class="bf-theme-purple">
 <head>
@@ -888,7 +907,10 @@ function renderShell(activeKey, title, contentHtml, { showToolbar } = {}) {
       <div class="page">
         <header class="page-header">
           <span class="bf-badge bfc-attn-bg">Under arbeid</span>
-          <h1>${escapeHtml(title)}</h1>
+          <div class="page-header-heading">
+            <h1>${escapeHtml(title)}</h1>
+            ${headerActions || ''}
+          </div>
           ${showToolbar ? renderToolbar() : ''}
         </header>
         ${contentHtml}
@@ -1039,23 +1061,39 @@ function renderInfoCard(label, value, tone = 'neutral') {
     </div></div>`;
 }
 
+// One <li> per sentence/step - presentation only, the underlying text and
+// order still come straight from getAvvikDetailContent/instructions.js
+// unchanged. Splits after a ./!/? that's followed by whitespace, which every
+// procedure string in avvikDetailContent.js/instructions.js satisfies.
+function renderProcedureSteps(procedure) {
+  const steps = procedure
+    .split(/(?<=[.!?])\s+/)
+    .map((step) => step.trim())
+    .filter(Boolean);
+  return `<ul class="procedure-steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`;
+}
+
 // Detail page for a single avvik/ordrelinje, reached from "Dette må gjøres"
-// on the open-avvik row panel (see renderDetailRow). Info cards, the external
-// links section, and links all hide themselves rather than rendering an
-// empty card/field/placeholder when a value is missing.
+// on the open-avvik row panel (see renderDetailRow). Info cards, the header
+// icon links, and links all hide themselves rather than rendering an empty
+// card/field/placeholder when a value is missing.
 function renderAvvikDetailPage(avvik) {
   const { summary, procedure, links } = getAvvikDetailContent(avvik);
 
+  // Every key figure shares the same discrepancyType status color (see
+  // typeBadges.js - the same mapping already used for the type badge on the
+  // open-avvik row and the type donut), rather than each card picking its
+  // own tone, so the boxes read as "this avvik's color" at a glance.
+  const avvikTone = getTypeBadgeClass(avvik.discrepancyType);
   const infoCards = [
-    renderInfoCard('PO-nummer', avvik.poNumber, 'brand'),
-    renderInfoCard('Innkjøpsordre / bestillingsnummer', avvik.orderId, 'theme'),
-    renderInfoCard('SKU / artikkelnummer', avvik.articleNumber, 'chill'),
-    renderInfoCard('Type avvik', avvik.discrepancyType, getTypeBadgeClass(avvik.discrepancyType)),
-    renderInfoCard('Sakseier', avvik.purchaserName, 'success'),
-    renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, 'warning'),
-    renderInfoCard('Partinummer', avvik.lotNumber, 'attn'),
-    renderInfoCard('Videresolgt', avvik.resoldStatus, 'neutral'),
-    renderInfoCard('Fakturanummer', avvik.invoiceNumber, 'alert'),
+    renderInfoCard('PO-nummer', avvik.poNumber, avvikTone),
+    renderInfoCard('Innkjøpsordre / bestillingsnummer', avvik.orderId, avvikTone),
+    renderInfoCard('SKU / artikkelnummer', avvik.articleNumber, avvikTone),
+    renderInfoCard('Type avvik', avvik.discrepancyType, avvikTone),
+    renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, avvikTone),
+    renderInfoCard('Partinummer', avvik.lotNumber, avvikTone),
+    renderInfoCard('Videresolgt', avvik.resoldStatus, avvikTone),
+    renderInfoCard('Fakturanummer', avvik.invoiceNumber, avvikTone),
   ]
     .filter(Boolean)
     .join('');
@@ -1070,7 +1108,7 @@ function renderAvvikDetailPage(avvik) {
         <img src="/assets/ticket-manager-logo.png" alt="" width="32" height="32">
       </a>`
     : '';
-  const externalLinksHtml =
+  const headerActions =
     mediusLinkHtml || ticketUrlHtml ? `<div class="external-logo-links">${mediusLinkHtml}${ticketUrlHtml}</div>` : '';
 
   const linksHtml = links
@@ -1085,26 +1123,21 @@ function renderAvvikDetailPage(avvik) {
 
     <div class="info-cards">${infoCards}</div>
 
+    <section class="detail-page-section procedure-section">
+      <h2>Anbefalt fremgangsmåte</h2>
+      <div class="bf-card procedure-card"><div class="bf-card-content">
+        ${renderProcedureSteps(procedure)}
+        ${linksHtml}
+      </div></div>
+    </section>
+
     <section class="detail-page-section">
       <h2>Sammendrag</h2>
       <div class="bf-card"><div class="bf-card-content">${escapeHtml(summary)}</div></div>
-    </section>
-
-    ${externalLinksHtml ? `<section class="detail-page-section">
-      <h2>Eksterne lenker</h2>
-      <div class="bf-card"><div class="bf-card-content">${externalLinksHtml}</div></div>
-    </section>` : ''}
-
-    <section class="detail-page-section">
-      <h2>Anbefalt fremgangsmåte</h2>
-      <div class="bf-card"><div class="bf-card-content">
-        <p style="margin-top: 0;">${escapeHtml(procedure)}</p>
-        ${linksHtml}
-      </div></div>
     </section>`;
 
-  const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} Avvik ${avvik.orderId}`;
-  return renderShell('open', pageTitle, content);
+  const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} – Avvik – ${avvik.orderId}`;
+  return renderShell('open', pageTitle, content, { headerActions });
 }
 
 function renderArchivePage(avvikList, notifications) {
