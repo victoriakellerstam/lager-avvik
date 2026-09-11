@@ -812,23 +812,28 @@ const SHARED_STYLE = `
 
   .back-link { display: inline-flex; align-items: center; gap: var(--bfs8); min-height: 44px; color: var(--bfc-base-c); text-decoration: none; margin-bottom: var(--bfs16); }
   .back-link:hover { text-decoration: underline; }
-  /* Each box's width follows its own content (no forced equal columns) and
-     wraps as needed; only the border carries the avvik's status color (see
-     renderInfoCard's info-card-<tone> class) - the background stays the
-     page's own neutral card background so it reads correctly in both themes. */
+  /* Each box grows to help its row fill the full page width, starting from a
+     content-sized basis (no forced equal columns) - only the border carries
+     the avvik's status color (see the shared tone-border-<tone> classes
+     below, reused by both renderInfoCard and the procedure-card); the
+     background stays the page's own neutral card background so it reads
+     correctly in both themes. */
   .info-cards { display: flex; flex-wrap: wrap; gap: var(--bfs16); margin-bottom: var(--bfs32); }
-  .info-card { border-radius: var(--bf-radius-m); border-width: 2px; border-style: solid; flex: 0 1 auto; }
-  .info-card .bf-card-content { padding: var(--bfs20); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 100%; }
+  .info-card { border-radius: var(--bf-radius-m); border-width: 2px; border-style: solid; flex: 1 1 auto; }
+  .info-card .bf-card-content { padding: var(--bfs24); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 100%; }
   .info-card .stat-label { font-size: var(--bf-font-size-m); }
   .info-card .stat-value { font-size: var(--bf-font-size-h3); font-weight: 700; margin-top: var(--bfs4); }
-  .info-card-theme { border-color: var(--bfc-theme); }
-  .info-card-success { border-color: var(--bfc-success); }
-  .info-card-warning { border-color: var(--bfc-warning); }
-  .info-card-attn { border-color: var(--bfc-attn); }
-  .info-card-alert { border-color: var(--bfc-alert); }
-  .info-card-chill { border-color: var(--bfc-chill); }
-  .info-card-brand { border-color: var(--bfc-brand); }
-  .info-card-neutral { border-color: var(--bfc-neutral); }
+  /* Shared avvik status-color border, reused by the info cards above and the
+     procedure-card below - keeps the color mapping in one place (see
+     typeBadges.js's getTypeBadgeClass, the single source for this mapping). */
+  .tone-border-theme { border-color: var(--bfc-theme); }
+  .tone-border-success { border-color: var(--bfc-success); }
+  .tone-border-warning { border-color: var(--bfc-warning); }
+  .tone-border-attn { border-color: var(--bfc-attn); }
+  .tone-border-alert { border-color: var(--bfc-alert); }
+  .tone-border-chill { border-color: var(--bfc-chill); }
+  .tone-border-brand { border-color: var(--bfc-brand); }
+  .tone-border-neutral { border-color: var(--bfc-neutral); }
   @media (max-width: 480px) {
     .info-card { flex: 1 1 100%; }
   }
@@ -841,13 +846,15 @@ const SHARED_STYLE = `
   .external-logo-link:focus-visible { outline: 2px solid var(--bfc-theme); outline-offset: 2px; }
   .external-logo-link img { width: 2rem; height: 2rem; object-fit: contain; }
   /* The clearest primary message on the page: a larger heading, generous
-     padding and a theme-colored accent set it apart from the supporting
-     Sammendrag/nøkkeltall content around it (see renderAvvikDetailPage). */
+     padding and a status-colored border (tone-border-<tone>, same avvik
+     status color as the info cards) set it apart from the supporting
+     Sammendrag/nøkkeltall content around it (see renderAvvikDetailPage). The
+     background stays neutral, matching the active theme. */
   .procedure-section { margin-top: var(--bfs48); }
   .procedure-section h2 { font-size: var(--bf-font-size-h2); margin: 0 0 var(--bfs16); }
-  .procedure-card { border: 2px solid var(--bfc-theme); background: var(--bfc-theme-fade); }
+  .procedure-card { border-width: 2px; border-style: solid; }
   .procedure-card .bf-card-content { padding: var(--bfs32); }
-  .procedure-steps { margin: 0; padding-left: var(--bfs24); display: flex; flex-direction: column; gap: var(--bfs12); font-size: var(--bf-font-size-l); line-height: 1.7; color: var(--bfc-theme-fade-c); }
+  .procedure-steps { margin: 0; padding-left: var(--bfs24); display: flex; flex-direction: column; gap: var(--bfs12); font-size: var(--bf-font-size-l); line-height: 1.7; }
   .procedure-card .bf-button { margin-top: var(--bfs16); }
   @media (max-width: 480px) {
     .procedure-section h2 { font-size: var(--bf-font-size-h3); }
@@ -1040,14 +1047,15 @@ function hasValue(value) {
   return value !== null && value !== undefined && value !== '';
 }
 
-// tone picks one of Bifrost's category color pairs (--bfc-<tone> for the
-// border, --bfc-<tone>-fade/-fade-c for a same-palette tinted background with
-// a contrast-matched text color) so each key figure reads as its own clearly
-// bordered box rather than blending into the page background.
+// tone picks one of Bifrost's category colors (--bfc-<tone>, via the shared
+// tone-border-<tone> class also used by the procedure-card) for the border
+// only - the card's own neutral background comes from the plain bf-card
+// class, so each key figure reads as its own clearly bordered box without
+// tinting the page background.
 function renderInfoCard(label, value, tone = 'neutral') {
   if (!hasValue(value)) return '';
   return `
-    <div class="bf-card info-card info-card-${tone}"><div class="bf-card-content">
+    <div class="bf-card info-card tone-border-${tone}"><div class="bf-card-content">
       <div class="stat-label">${escapeHtml(label)}</div>
       <div class="stat-value">${escapeHtml(String(value))}</div>
     </div></div>`;
@@ -1117,7 +1125,7 @@ function renderAvvikDetailPage(avvik) {
 
     <section class="detail-page-section procedure-section">
       <h2>Anbefalt fremgangsmåte</h2>
-      <div class="bf-card procedure-card"><div class="bf-card-content">
+      <div class="bf-card procedure-card tone-border-${avvikTone}"><div class="bf-card-content">
         ${renderProcedureSteps(procedure)}
         ${linksHtml}
       </div></div>
