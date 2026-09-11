@@ -80,6 +80,33 @@ test('an unknown discrepancy type still gets a generic fix instruction', () => {
   assert.match(preview.body, /Undersøk avviket/);
 });
 
+test('Varefaktura — under behandling with a known invoice deviation names the deviation instead of the generic instruction', () => {
+  const preview = buildEmailPreview({
+    orderId: 'SO-4',
+    articleNumber: 'ART-4',
+    purchaserName: 'Kari Nordmann',
+    purchaserEmail: 'kari.nordmann@example.com',
+    discrepancyType: 'Varefaktura — under behandling',
+    daysWaiting: 22,
+    invoiceDeviations: ['Unit price deviation'],
+  });
+  assert.match(preview.body, /Enhetsprisen på fakturaen avviker fra innkjøpsordre for ART-4/);
+  assert.match(preview.body, /legg igjen en kommentar i Medius/);
+});
+
+test('Varefaktura — under behandling with no matched invoice deviation falls back to the generic instruction', () => {
+  const preview = buildEmailPreview({
+    orderId: 'SO-5',
+    articleNumber: 'ART-5',
+    purchaserName: 'Kari Nordmann',
+    purchaserEmail: 'kari.nordmann@example.com',
+    discrepancyType: 'Varefaktura — under behandling',
+    daysWaiting: 22,
+    invoiceDeviations: [],
+  });
+  assert.match(preview.body, /Faktura må behandles/);
+});
+
 test('the email follows the requested shape: order+SKU in the subject, the scenario, days waiting, the fix, and who to contact', () => {
   const preview = buildEmailPreview({
     orderId: 'SO-99999-12345',

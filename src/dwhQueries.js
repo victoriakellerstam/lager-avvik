@@ -967,10 +967,38 @@ async function fetchStockMovementSummaryByLot() {
   });
 }
 
+// Line-level deviations between an invoice and its purchase order, for
+// Varefaktura — under behandling avvik: purchase_order here is the
+// bestillingsnummer (order_number/supplier_order_number), NOT the po_number
+// used everywhere else in this file - a different join key than the rest of
+// the Medius tables, confirmed directly by the user. article_code lets
+// avvikSync.js double-check it's matching the same line the avvik was raised
+// on, not just any deviation on the same order. deviation_name is an
+// existing column on the source table (not computed here) - its known values
+// are: "Line amount additional charge deviation", "Unit price additional
+// charge deviation", "Total amount deviation", "Quantity deviation", "Unit
+// price deviation", "Line amount deviation" (see src/invoiceDeviations.js for
+// the Norwegian descriptions used in the email).
+async function fetchOrderDeviations() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT
+        purchase_order,
+        article_code,
+        deviation_name,
+        document_number
+      FROM [dwh].[finance].[medius_order_deviations]
+      WHERE deviation_name IS NOT NULL
+    `);
+    return result.recordset;
+  });
+}
+
 module.exports = {
   fetchAvvikRows,
   fetchIntilityUsers,
   fetchDepartments,
   fetchMediusLinks,
   fetchStockMovementSummaryByLot,
+  fetchOrderDeviations,
 };

@@ -22,6 +22,15 @@ function buildMediusLinkKey(poNumber, articleNumber, supplierIdText) {
   return [poNumber, articleNumber, supplierIdText].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
 
+// medius_order_deviations.purchase_order is the bestillingsnummer
+// (order_number/supplier_order_number), NOT the po_number every other Medius
+// table in this pipeline joins on - a different key, confirmed directly by
+// the user. article_code is included as a double-check that a deviation
+// found for the order is actually on the same line the avvik was raised on.
+function buildOrderDeviationKey(orderId, articleNumber) {
+  return [orderId, articleNumber].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
+}
+
 // 'Ja' once the lot's latest stock balance has reached 0 (everything that
 // came in has since gone back out); 'Nei' while the balance still sits at
 // (or above) everything ever received (nothing has gone out yet); 'Delvis'
@@ -54,6 +63,7 @@ async function syncAvvikFromDwh() {
   const departments = await dwhQueries.fetchDepartments();
   const mediusLinks = await dwhQueries.fetchMediusLinks();
   const stockMovementByLot = await dwhQueries.fetchStockMovementSummaryByLot();
+  const orderDeviations = await dwhQueries.fetchOrderDeviations();
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
@@ -74,6 +84,12 @@ async function syncAvvikFromDwh() {
       { latestBalance: s.latest_balance, totalReceived: s.total_received },
     ])
   );
+  const deviationNamesByOrderArticle = new Map();
+  for (const d of orderDeviations) {
+    const key = buildOrderDeviationKey(d.purchase_order, d.article_code);
+    if (!deviationNamesByOrderArticle.has(key)) deviationNamesByOrderArticle.set(key, new Set());
+    deviationNamesByOrderArticle.get(key).add(d.deviation_name);
+  }
 
   const avvikRows = [];
   for (const row of rows) {
@@ -109,6 +125,9 @@ async function syncAvvikFromDwh() {
       invoiceNumber: mediusInfo ? mediusInfo.invoiceNumber : null,
       mediusLink: mediusInfo ? mediusInfo.mediusLink : null,
       resoldStatus: resolveResoldStatus(row.lot_number, stockSummaryByLot),
+      invoiceDeviations: [
+        ...(deviationNamesByOrderArticle.get(buildOrderDeviationKey(row.supplier_order_number, row.article_number)) || []),
+      ],
     });
   }
 
