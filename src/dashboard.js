@@ -327,11 +327,14 @@ function renderFinanceRow(a) {
 const NO_OWNER_NAMES = new Set(['Sakseier ikke funnet', 'Manuell ordre – sakseier mangler']);
 const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
 
+// Kostnadsfaktura — reverser lives in the Finance section too (its own
+// resolve workflow is Finance-internal, same as the other Finance cases),
+// but keeps its own discrepancyType/badge rather than being relabeled. Also
+// used by renderAvvikDetailPage to pick the right active side-nav item for
+// an avvik reached via "Mer informasjon" vs. "Dette må gjøres".
+const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discrepancyType === KOSTNADSFAKTURA_REVERSER;
+
 function splitAvvik(avvikList) {
-  // Kostnadsfaktura — reverser lives in the Finance section too (its own
-  // resolve workflow is Finance-internal, same as the other cases here), but
-  // keeps its own discrepancyType/badge rather than being relabeled.
-  const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discrepancyType === KOSTNADSFAKTURA_REVERSER;
   const financeCases = avvikList.filter(isFinanceSectionCase);
   const withoutFinance = avvikList.filter((a) => !isFinanceSectionCase(a));
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
@@ -1136,11 +1139,14 @@ function renderAvvikDetailPage(avvik) {
 
   // Kostnadsfaktura — reverser has nothing actionable to recommend (the note
   // box above already says why it's resolved) - drop the section entirely.
-  // Spesielle caser - Finance gets the same box/list treatment but under
+  // Spesielle caser - Finance gets the same box treatment but under
   // "Informasjon" instead of "Anbefalt fremgangsmåte", since Finance handles
-  // it internally rather than following a suggested procedure.
+  // it internally rather than following a suggested procedure - its box is
+  // intentionally left empty for now (content still being decided).
+  const isSpesielleCaserFinance = isFinanceCase(avvik.discrepancyType);
   const procedureHeading =
-    avvik.discrepancyType === KOSTNADSFAKTURA_REVERSER ? null : isFinanceCase(avvik.discrepancyType) ? 'Informasjon' : 'Anbefalt fremgangsmåte';
+    avvik.discrepancyType === KOSTNADSFAKTURA_REVERSER ? null : isSpesielleCaserFinance ? 'Informasjon' : 'Anbefalt fremgangsmåte';
+  const procedureBodyHtml = isSpesielleCaserFinance ? '' : `${renderProcedureSteps(procedure)}${linksHtml}`;
 
   const content = `
     <a id="back-link" class="back-link" href="/"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Åpne avvik</a>
@@ -1156,13 +1162,16 @@ function renderAvvikDetailPage(avvik) {
     ${procedureHeading ? `<section class="detail-page-section procedure-section">
       <h2>${procedureHeading}</h2>
       <div class="bf-card procedure-card tone-border-${avvikTone}"><div class="bf-card-content">
-        ${renderProcedureSteps(procedure)}
-        ${linksHtml}
+        ${procedureBodyHtml}
       </div></div>
     </section>` : ''}`;
 
   const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} – Avvik – ${avvik.orderId}`;
-  return renderShell('open', pageTitle, content, { headerActions });
+  // "Mer informasjon" (Finance-section cases) should light up "Saker som
+  // løses av Finance" in the side nav, not "Åpne avvik" - see
+  // isFinanceSectionCase/splitAvvik above.
+  const activeKey = isFinanceSectionCase(avvik) ? 'finance' : 'open';
+  return renderShell(activeKey, pageTitle, content, { headerActions });
 }
 
 function renderArchivePage(avvikList, notifications) {
