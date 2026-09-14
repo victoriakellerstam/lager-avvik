@@ -22,6 +22,36 @@ function buildMediusLinkKey(poNumber, articleNumber, supplierIdText) {
   return [poNumber, articleNumber, supplierIdText].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
 
+// Archived first, any other valid/active status next (e.g. Open), then
+// Invalidated last - the exact processing_status values already relied on
+// elsewhere in this pipeline (see dwhQueries.js's fetchAvvikRows
+// is_*_archived_via_po/is_*_invalidated_via_po/is_*_open_via_po). Anything
+// other than these two known statuses falls into the middle tier without
+// needing to name it, so this doesn't have to guess at every possible value.
+function mediusInvoicePriority(processingStatus) {
+  if (processingStatus === 'Archived') return 0;
+  if (processingStatus === 'Invalidated') return 2;
+  return 1;
+}
+
+// Picks one medius_invoice_head row out of several candidates that all
+// matched the same PO+article+supplier (see fetchMediusLinks/
+// buildMediusLinkKey) - a lone candidate is always kept as-is, whatever its
+// status, so a single Invalidated invoice still surfaces exactly like
+// before this existed. document_id is a stable, always-same-result tiebreak
+// between two candidates of the same status - it's a COLLATE'd string key
+// in this data model, not a confirmed date/recency field, so this is not a
+// "pick the newest" claim, only a deterministic one.
+function pickBestMediusInvoice(candidates) {
+  return candidates.reduce((best, candidate) => {
+    if (!best) return candidate;
+    const bestPriority = mediusInvoicePriority(best.processing_status);
+    const candidatePriority = mediusInvoicePriority(candidate.processing_status);
+    if (candidatePriority !== bestPriority) return candidatePriority < bestPriority ? candidate : best;
+    return String(candidate.document_id) > String(best.document_id) ? candidate : best;
+  }, null);
+}
+
 // medius_order_deviations.purchase_order is the bestillingsnummer
 // (order_number/supplier_order_number), NOT the po_number every other Medius
 // table in this pipeline joins on - a different key, confirmed directly by
@@ -124,11 +154,22 @@ async function syncAvvikFromDwh() {
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.department])
   );
   const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
+  // More than one medius_invoice_head row can match the same PO+article+
+  // supplier (see fetchMediusLinks) - group every candidate per key first,
+  // then let pickBestMediusInvoice choose one, so the invoiceNumber and
+  // mediusLink shown together always come from the same winning row rather
+  // than two independently (and possibly differently) chosen ones.
+  const mediusCandidatesByKey = new Map();
+  for (const m of mediusLinks) {
+    const key = buildMediusLinkKey(m.visma_purchase_order, m.article_code, m.supplier_id);
+    if (!mediusCandidatesByKey.has(key)) mediusCandidatesByKey.set(key, []);
+    mediusCandidatesByKey.get(key).push(m);
+  }
   const mediusInfoByKey = new Map(
-    mediusLinks.map((m) => [
-      buildMediusLinkKey(m.visma_purchase_order, m.article_code, m.supplier_id),
-      { invoiceNumber: m.invoice_number, mediusLink: m.medius_link },
-    ])
+    [...mediusCandidatesByKey.entries()].map(([key, candidates]) => {
+      const best = pickBestMediusInvoice(candidates);
+      return [key, { invoiceNumber: best.invoice_number, mediusLink: best.medius_link }];
+    })
   );
   const stockBreakdownByLot = new Map(
     stockMovementByLot.map((s) => [
@@ -217,4 +258,6 @@ module.exports = {
   resolveStockBreakdown,
   resolveResoldStatus,
   resolveWrittenOffStatus,
+  pickBestMediusInvoice,
+  buildMediusLinkKey,
 };

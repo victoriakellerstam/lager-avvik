@@ -897,13 +897,21 @@ async function fetchDepartments() {
   });
 }
 
-// Medius link per PO+article+supplier, per the user's exact join: lines to
-// order via PO/article_code/supplier_id, lines to head via PO+supplier_id
-// (not document_id - this is a distinct lookup from fetchAvvikRows's own
-// Medius matching, added specifically to surface a clickable link, not to
-// reclassify anything). The PO column is visma_purchase_order, not
-// purchase_order (confirmed via a real "Invalid column name" error) -
-// matches every other Medius query in this file.
+// Medius link candidates per PO+article+supplier, per the user's exact
+// join: lines to order via PO/article_code/supplier_id, lines to head via
+// PO+supplier_id (not document_id - this is a distinct lookup from
+// fetchAvvikRows's own Medius matching, added specifically to surface a
+// clickable link, not to reclassify anything). The PO column is
+// visma_purchase_order, not purchase_order (confirmed via a real "Invalid
+// column name" error) - matches every other Medius query in this file.
+//
+// A PO+article+supplier can match more than one medius_invoice_head row
+// (e.g. an Invalidated one and an Archived one, sometimes sharing the same
+// invoice_number) - every candidate is returned as-is (including
+// processing_status and document_id) rather than picked here, so
+// avvikSync.js's pickBestMediusInvoice can prioritize deterministically and
+// stay unit-testable; a plain ORDER BY in SQL would encode the same
+// priority but couldn't be exercised without a live dwh connection.
 async function fetchMediusLinks() {
   return withPool(async (pool) => {
     const result = await pool.request().query(`
@@ -912,7 +920,9 @@ async function fetchMediusLinks() {
         mil.article_code,
         mil.supplier_id,
         mih.invoice_number,
-        mih.medius_link
+        mih.medius_link,
+        mih.processing_status,
+        mih.document_id
       FROM [dwh].[finance].[medius_invoice_lines] mil
       INNER JOIN [dwh].[finance].[medius_invoice_head] mih
         ON mih.visma_purchase_order = mil.visma_purchase_order

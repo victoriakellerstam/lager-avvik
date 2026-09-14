@@ -2,7 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveStockBreakdown, resolveResoldStatus, resolveWrittenOffStatus } = require('../src/avvikSync');
+const {
+  resolveStockBreakdown,
+  resolveResoldStatus,
+  resolveWrittenOffStatus,
+  pickBestMediusInvoice,
+  buildMediusLinkKey,
+} = require('../src/avvikSync');
 
 function breakdownMap(lotNumber, totalQuantity, resoldQuantity, writtenOffQuantity) {
   return new Map([[String(lotNumber).trim().toLowerCase(), { totalQuantity, resoldQuantity, writtenOffQuantity }]]);
@@ -109,4 +115,71 @@ test('resolveStockBreakdown: resoldQuantity + writtenOffQuantity exceeding total
   assert.match(warnings[0], /8/);
   assert.match(warnings[0], /5/);
   assert.match(warnings[0], /10/);
+});
+
+// Scenario 1: én arkivert og én makulert faktura med samme fakturanummer -
+// lenken skal peke til den arkiverte fakturaen.
+test('pickBestMediusInvoice: an Archived candidate wins over an Invalidated one with the same invoice_number', () => {
+  const archived = { invoice_number: 'INV-1', medius_link: 'https://medius/archived', processing_status: 'Archived', document_id: 'D1' };
+  const invalidated = { invoice_number: 'INV-1', medius_link: 'https://medius/invalidated', processing_status: 'Invalidated', document_id: 'D2' };
+
+  assert.deepEqual(pickBestMediusInvoice([invalidated, archived]), archived);
+  assert.deepEqual(pickBestMediusInvoice([archived, invalidated]), archived);
+});
+
+// Scenario 2: bare én makulert faktura - behold eksisterende oppførsel
+// (den vises, siden det ikke finnes noe bedre alternativ).
+test('pickBestMediusInvoice: a lone Invalidated candidate is still kept as-is', () => {
+  const invalidated = { invoice_number: 'INV-2', medius_link: 'https://medius/invalidated', processing_status: 'Invalidated', document_id: 'D1' };
+  assert.deepEqual(pickBestMediusInvoice([invalidated]), invalidated);
+});
+
+// Scenario 3: bare én arkivert faktura - lenken skal peke til den.
+test('pickBestMediusInvoice: a lone Archived candidate is kept', () => {
+  const archived = { invoice_number: 'INV-3', medius_link: 'https://medius/archived', processing_status: 'Archived', document_id: 'D1' };
+  assert.deepEqual(pickBestMediusInvoice([archived]), archived);
+});
+
+// Scenario 4: flere arkiverte fakturaer med samme fakturanummer - velg
+// deterministisk (document_id er en stabil, ikke-bekreftet-som-dato
+// tiebreak - se avvikSync.js's pickBestMediusInvoice).
+test('pickBestMediusInvoice: multiple Archived candidates pick the same one deterministically, regardless of input order', () => {
+  const archived1 = { invoice_number: 'INV-4', medius_link: 'https://medius/a', processing_status: 'Archived', document_id: 'D1' };
+  const archived2 = { invoice_number: 'INV-4', medius_link: 'https://medius/b', processing_status: 'Archived', document_id: 'D2' };
+
+  const pickA = pickBestMediusInvoice([archived1, archived2]);
+  const pickB = pickBestMediusInvoice([archived2, archived1]);
+  assert.deepEqual(pickA, pickB);
+  assert.deepEqual(pickA, archived2); // higher document_id, per the documented tiebreak
+});
+
+// Scenario 5: samme fakturanummer hos forskjellige leverandører - ikke
+// krysskoble. Grupperingen (buildMediusLinkKey) inkluderer supplier_id, så
+// to ulike leverandører for samme PO+artikkel havner aldri i samme gruppe
+// for pickBestMediusInvoice å velge mellom.
+test('buildMediusLinkKey: different suppliers for the same PO+article never collide into the same key', () => {
+  const keyA = buildMediusLinkKey('PO-1', 'ART-1', 'SUPPLIER-A');
+  const keyB = buildMediusLinkKey('PO-1', 'ART-1', 'SUPPLIER-B');
+  assert.notEqual(keyA, keyB);
+});
+
+// Scenario 6: internbestilling med både makulert og arkivert faktura -
+// samme mekanisme som scenario 1, uavhengig av discrepancyType (denne
+// funksjonen kjenner ikke avviksstatusen, kun medius_invoice_head-radene).
+test('pickBestMediusInvoice: Archived wins over Invalidated regardless of which avvik type triggered the lookup', () => {
+  const archived = { invoice_number: 'INV-6', medius_link: 'https://medius/archived', processing_status: 'Archived', document_id: 'D1' };
+  const invalidated = { invoice_number: 'INV-6', medius_link: 'https://medius/invalidated', processing_status: 'Invalidated', document_id: 'D2' };
+  assert.deepEqual(pickBestMediusInvoice([invalidated, archived]), archived);
+});
+
+test('pickBestMediusInvoice: an Open candidate (valid/active, neither Archived nor Invalidated) beats Invalidated', () => {
+  const open = { invoice_number: 'INV-7', medius_link: 'https://medius/open', processing_status: 'Open', document_id: 'D1' };
+  const invalidated = { invoice_number: 'INV-7', medius_link: 'https://medius/invalidated', processing_status: 'Invalidated', document_id: 'D2' };
+  assert.deepEqual(pickBestMediusInvoice([invalidated, open]), open);
+});
+
+test('pickBestMediusInvoice: Archived still wins over an Open candidate', () => {
+  const archived = { invoice_number: 'INV-8', medius_link: 'https://medius/archived', processing_status: 'Archived', document_id: 'D1' };
+  const open = { invoice_number: 'INV-8', medius_link: 'https://medius/open', processing_status: 'Open', document_id: 'D2' };
+  assert.deepEqual(pickBestMediusInvoice([open, archived]), archived);
 });
