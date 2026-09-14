@@ -31,18 +31,53 @@ function buildOrderDeviationKey(orderId, articleNumber) {
   return [orderId, articleNumber].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
 
-// 'Ja' once the lot's latest stock balance has reached 0 (everything that
-// came in has since gone back out); 'Nei' while the balance still sits at
-// (or above) everything ever received (nothing has gone out yet); 'Delvis'
-// for anything in between. No summary row for the lot at all (never
-// received, or no lot_number on this order line) means unknown, not 'Nei'.
-function resolveResoldStatus(lotNumber, summaryByLot) {
-  const summary = summaryByLot.get(String(lotNumber ?? '').trim().toLowerCase());
-  if (!summary) return null;
-  const { latestBalance, totalReceived } = summary;
-  if (latestBalance <= 0) return 'Ja';
-  if (latestBalance >= totalReceived) return 'Nei';
-  return 'Delvis';
+// 'Ja' once this category alone accounts for everything received; 'Delvis'
+// once it accounts for some but not all - including whenever the *other*
+// category also has units, per the user's explicit call: Videresolgt and
+// Skrevet ut av lager are never both 'Ja' at once, even if together they add
+// up to totalQuantity. null (hide the card) when this category has nothing.
+function classifyOutgoingStatus(quantity, otherCategoryQuantity, totalQuantity) {
+  if (quantity <= 0) return null;
+  if (otherCategoryQuantity > 0) return 'Delvis';
+  return quantity >= totalQuantity ? 'Ja' : 'Delvis';
+}
+
+// Videresolgt/Skrevet ut av lager for a lot, from dwhQueries.js's
+// fetchStockMovementBreakdownByLot (grouped by type_of_change - see that
+// query for exactly which type_of_change values land in which category).
+//
+// Known, accepted limitation: stock_history has no reversal/voucher
+// reference to tell a genuine reversal apart from a fresh receipt that
+// happens to land in the same type_of_change bucket, so positive rows are
+// only ever added to totalQuantity, never subtracted back out of either
+// outgoing category. This can overstate resoldQuantity/writtenOffQuantity
+// when a real reversal occurs - deliberately accepted per the user rather
+// than guessing at which positive rows are reversals.
+//
+// No breakdown row for the lot at all (never received, or no lot_number on
+// this order line) means both categories are 0, which hides both cards.
+function resolveStockBreakdown(lotNumber, breakdownByLot) {
+  const breakdown = breakdownByLot.get(String(lotNumber ?? '').trim().toLowerCase());
+  const totalQuantity = breakdown ? breakdown.totalQuantity : 0;
+  const resoldQuantity = breakdown ? breakdown.resoldQuantity : 0;
+  const writtenOffQuantity = breakdown ? breakdown.writtenOffQuantity : 0;
+
+  // Can't happen from a single stock_history row (type_of_change = 0 is
+  // never also in the resold IN-list), so a lot tripping this has duplicate
+  // rows or a lot_number join collision - surfaced, not silently corrected.
+  if (totalQuantity > 0 && resoldQuantity + writtenOffQuantity > totalQuantity) {
+    console.warn(
+      `stock breakdown for lot ${lotNumber}: resoldQuantity (${resoldQuantity}) + writtenOffQuantity (${writtenOffQuantity}) exceeds totalQuantity (${totalQuantity})`
+    );
+  }
+
+  return {
+    totalQuantity,
+    resoldQuantity,
+    writtenOffQuantity,
+    resoldStatus: classifyOutgoingStatus(resoldQuantity, writtenOffQuantity, totalQuantity),
+    writtenOffStatus: classifyOutgoingStatus(writtenOffQuantity, resoldQuantity, totalQuantity),
+  };
 }
 
 /**
@@ -62,7 +97,7 @@ async function syncAvvikFromDwh() {
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
   const departments = await dwhQueries.fetchDepartments();
   const mediusLinks = await dwhQueries.fetchMediusLinks();
-  const stockMovementByLot = await dwhQueries.fetchStockMovementSummaryByLot();
+  const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot();
   const orderDeviations = await dwhQueries.fetchOrderDeviations();
 
   const emailByFullName = new Map(
@@ -78,10 +113,10 @@ async function syncAvvikFromDwh() {
       { invoiceNumber: m.invoice_number, mediusLink: m.medius_link },
     ])
   );
-  const stockSummaryByLot = new Map(
+  const stockBreakdownByLot = new Map(
     stockMovementByLot.map((s) => [
       String(s.lot_number ?? '').trim().toLowerCase(),
-      { latestBalance: s.latest_balance, totalReceived: s.total_received },
+      { totalQuantity: s.total_quantity, resoldQuantity: s.resold_quantity, writtenOffQuantity: s.written_off_quantity },
     ])
   );
   const deviationNamesByOrderArticle = new Map();
@@ -108,6 +143,7 @@ async function syncAvvikFromDwh() {
     const mediusInfo = mediusInfoByKey.get(
       buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)
     );
+    const stockBreakdown = resolveStockBreakdown(row.lot_number, stockBreakdownByLot);
 
     avvikRows.push({
       id: buildSyntheticId(row),
@@ -124,7 +160,11 @@ async function syncAvvikFromDwh() {
       daysWaiting: row.days_waiting,
       invoiceNumber: mediusInfo ? mediusInfo.invoiceNumber : null,
       mediusLink: mediusInfo ? mediusInfo.mediusLink : null,
-      resoldStatus: resolveResoldStatus(row.lot_number, stockSummaryByLot),
+      totalQuantity: stockBreakdown.totalQuantity,
+      resoldQuantity: stockBreakdown.resoldQuantity,
+      writtenOffQuantity: stockBreakdown.writtenOffQuantity,
+      resoldStatus: stockBreakdown.resoldStatus,
+      writtenOffStatus: stockBreakdown.writtenOffStatus,
       invoiceDeviations: [
         ...(deviationNamesByOrderArticle.get(buildOrderDeviationKey(row.supplier_order_number, row.article_number)) || []),
       ],
@@ -154,4 +194,4 @@ async function resolveDepartmentForPurchaser(name) {
   return (match && match.department) || null;
 }
 
-module.exports = { syncAvvikFromDwh, resolveDepartmentForPurchaser };
+module.exports = { syncAvvikFromDwh, resolveDepartmentForPurchaser, resolveStockBreakdown, classifyOutgoingStatus };

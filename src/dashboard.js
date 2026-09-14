@@ -1071,13 +1071,26 @@ function hasValue(value) {
 // only - the card's own neutral background comes from the plain bf-card
 // class, so each key figure reads as its own clearly bordered box without
 // tinting the page background.
-function renderInfoCard(label, value, tone = 'neutral') {
+// subValue reuses the same .stat-sublabel small-text-under-the-number
+// pattern already used for the "Viser X av Y" line in renderStats, e.g. for
+// Videresolgt/Skrevet ut av lager's "{quantity} av {totalQuantity}".
+function renderInfoCard(label, value, tone = 'neutral', subValue) {
   if (!hasValue(value)) return '';
   return `
     <div class="bf-card info-card tone-border-${tone}"><div class="bf-card-content">
       <div class="stat-label">${escapeHtml(label)}</div>
       <div class="stat-value">${escapeHtml(String(value))}</div>
+      ${hasValue(subValue) ? `<div class="stat-sublabel">${escapeHtml(String(subValue))}</div>` : ''}
     </div></div>`;
+}
+
+// Defensive display-only clamp: avvikSync.js's resolveStockBreakdown logs a
+// warning if resoldQuantity + writtenOffQuantity ever exceeds totalQuantity
+// (duplicate stock_history rows or a bad lot join) without altering the
+// underlying computed values - this only keeps the shown "x av y" from
+// reading a nonsensical count above the total, per the user's explicit call.
+function formatQuantityOfTotal(quantity, totalQuantity) {
+  return `${Math.min(quantity, totalQuantity)} av ${totalQuantity}`;
 }
 
 // One <li> per sentence/step - presentation only, the underlying text and
@@ -1111,7 +1124,18 @@ function renderAvvikDetailPage(avvik) {
     renderInfoCard('Type avvik', avvik.discrepancyType, avvikTone),
     renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, avvikTone),
     renderInfoCard('Partinummer', avvik.lotNumber, avvikTone),
-    renderInfoCard('Videresolgt', avvik.resoldStatus, avvikTone),
+    renderInfoCard(
+      'Videresolgt',
+      avvik.resoldStatus,
+      avvikTone,
+      avvik.resoldStatus ? formatQuantityOfTotal(avvik.resoldQuantity, avvik.totalQuantity) : null
+    ),
+    renderInfoCard(
+      'Skrevet ut av lager',
+      avvik.writtenOffStatus,
+      avvikTone,
+      avvik.writtenOffStatus ? formatQuantityOfTotal(avvik.writtenOffQuantity, avvik.totalQuantity) : null
+    ),
     renderInfoCard('Fakturanummer', avvik.invoiceNumber, avvikTone),
   ]
     .filter(Boolean)
