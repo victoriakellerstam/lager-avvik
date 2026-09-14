@@ -31,15 +31,27 @@ function buildOrderDeviationKey(orderId, articleNumber) {
   return [orderId, articleNumber].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
 
-// 'Ja' once this category alone accounts for everything received; 'Delvis'
-// once it accounts for some but not all - including whenever the *other*
-// category also has units, per the user's explicit call: Videresolgt and
-// Skrevet ut av lager are never both 'Ja' at once, even if together they add
-// up to totalQuantity. null (hide the card) when this category has nothing.
-function classifyOutgoingStatus(quantity, otherCategoryQuantity, totalQuantity) {
-  if (quantity <= 0) return null;
-  if (otherCategoryQuantity > 0) return 'Delvis';
-  return quantity >= totalQuantity ? 'Ja' : 'Delvis';
+// Videresolgt is shown ('Nei'/'Delvis'/'Ja') whenever the lot isn't fully
+// written off - unlike Skrevet ut av lager below, it has no hidden state, so
+// a lot with nothing resold yet still reads 'Nei' rather than disappearing.
+// The one exception is isFullyWrittenOff: once writtenOffQuantity alone
+// already covers the whole total, Videresolgt drops out entirely instead of
+// showing a redundant 'Nei' next to it.
+function resolveResoldStatus(resoldQuantity, writtenOffQuantity, totalQuantity) {
+  const isFullyWrittenOff = totalQuantity > 0 && writtenOffQuantity >= totalQuantity && resoldQuantity === 0;
+  if (isFullyWrittenOff) return null;
+  if (resoldQuantity === 0) return 'Nei';
+  if (resoldQuantity < totalQuantity) return 'Delvis';
+  if (writtenOffQuantity === 0) return 'Ja';
+  return 'Delvis';
+}
+
+// Skrevet ut av lager only appears at all once something has actually been
+// written off - no 'Nei' state, unlike Videresolgt above.
+function resolveWrittenOffStatus(resoldQuantity, writtenOffQuantity, totalQuantity) {
+  if (writtenOffQuantity <= 0) return null;
+  if (writtenOffQuantity >= totalQuantity && resoldQuantity === 0) return 'Ja';
+  return 'Delvis';
 }
 
 // Videresolgt/Skrevet ut av lager for a lot, from dwhQueries.js's
@@ -71,12 +83,17 @@ function resolveStockBreakdown(lotNumber, breakdownByLot) {
     );
   }
 
+  // No breakdown row for the lot at all (never received, or no lot_number
+  // on this order line) means there's nothing to report - hide both cards
+  // rather than resolveResoldStatus's normal 'Nei' for "nothing resold yet".
+  const hasData = totalQuantity > 0;
+
   return {
     totalQuantity,
     resoldQuantity,
     writtenOffQuantity,
-    resoldStatus: classifyOutgoingStatus(resoldQuantity, writtenOffQuantity, totalQuantity),
-    writtenOffStatus: classifyOutgoingStatus(writtenOffQuantity, resoldQuantity, totalQuantity),
+    resoldStatus: hasData ? resolveResoldStatus(resoldQuantity, writtenOffQuantity, totalQuantity) : null,
+    writtenOffStatus: hasData ? resolveWrittenOffStatus(resoldQuantity, writtenOffQuantity, totalQuantity) : null,
   };
 }
 
@@ -194,4 +211,10 @@ async function resolveDepartmentForPurchaser(name) {
   return (match && match.department) || null;
 }
 
-module.exports = { syncAvvikFromDwh, resolveDepartmentForPurchaser, resolveStockBreakdown, classifyOutgoingStatus };
+module.exports = {
+  syncAvvikFromDwh,
+  resolveDepartmentForPurchaser,
+  resolveStockBreakdown,
+  resolveResoldStatus,
+  resolveWrittenOffStatus,
+};

@@ -1128,7 +1128,8 @@ function renderAvvikDetailPage(avvik) {
       'Videresolgt',
       avvik.resoldStatus,
       avvikTone,
-      avvik.resoldStatus ? formatQuantityOfTotal(avvik.resoldQuantity, avvik.totalQuantity) : null
+      // 'Nei' means "nothing resold yet" - no "0 av totalQuantity" text.
+      avvik.resoldQuantity > 0 ? formatQuantityOfTotal(avvik.resoldQuantity, avvik.totalQuantity) : null
     ),
     renderInfoCard(
       'Skrevet ut av lager',
