@@ -5,6 +5,7 @@ const {
   INTERNBESTILLING,
   KOSTNADSFAKTURA_REVERSER,
   KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT,
+  MANUELL_ORDRE,
   ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR,
   VAREFAKTURA_UNDER_BEHANDLING,
 } = require('./discrepancyTypes');
@@ -37,6 +38,13 @@ function ikkeMottattFakturaSummary(avvik) {
 const DETAIL_CONTENT = {
   [IKKE_MOTTATT_FAKTURA_I_MEDIUS]: {
     summary: ikkeMottattFakturaSummary,
+    procedure: () =>
+      `For å løse avviket må du sende en oppdatering til Finance med fakturanummeret, eller kontakte distributøren for å undersøke status på fakturaen. ${TEAMS_CONTACT}`,
+    links: [],
+  },
+  [MANUELL_ORDRE]: {
+    summary: (avvik) =>
+      `Avviket er av typen «${MANUELL_ORDRE}» og har ventet i ${avvik.daysWaiting ?? 'ukjent antall'} dager.`,
     procedure: () =>
       'Ordren ligger fortsatt åpen ettersom vi ikke har mottatt en faktura i Medius som kan knyttes til innkjøpsordren. Gi beskjed til Finance dersom du har mottatt fakturaen, slik at den manuelle ordren kan matches mot en leverandørfaktura.',
     links: [],

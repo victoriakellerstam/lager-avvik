@@ -7,6 +7,7 @@ const {
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
   KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT,
+  MANUELL_ORDRE,
   ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR,
   VAREFAKTURA_UNDER_BEHANDLING,
   SPESIELLE_CASER_FINANCE,
@@ -32,14 +33,22 @@ test('Ikke mottatt faktura i Medius: with a PO number uses the non-manual wordin
   assert.match(summary, /SO-99001/);
   assert.match(summary, /ART-123/);
   assert.match(summary, /25 dager/);
-  assert.match(procedure, /Ordren ligger fortsatt åpen ettersom vi ikke har mottatt en faktura i Medius som kan knyttes til innkjøpsordren\./);
-  assert.match(procedure, /Gi beskjed til Finance dersom du har mottatt fakturaen, slik at den manuelle ordren kan matches mot en leverandørfaktura\./);
+  assert.match(procedure, /Finance/);
 });
 
 test('Ikke mottatt faktura i Medius: without a PO number uses the manual-order wording', () => {
   const { summary } = getAvvikDetailContent(baseAvvik({ poNumber: null }));
   assert.match(summary, /denne manuelle ordren/);
   assert.match(summary, /ikke kjenner statusen på fakturaen/);
+});
+
+test('Manuell ordre: procedure lists the two required points', () => {
+  const avvik = baseAvvik({ discrepancyType: MANUELL_ORDRE, daysWaiting: 12 });
+  const { summary, procedure } = getAvvikDetailContent(avvik);
+  assert.match(summary, /Manuell ordre/);
+  assert.match(summary, /12 dager/);
+  assert.match(procedure, /Ordren ligger fortsatt åpen ettersom vi ikke har mottatt en faktura i Medius som kan knyttes til innkjøpsordren\./);
+  assert.match(procedure, /Gi beskjed til Finance dersom du har mottatt fakturaen, slik at den manuelle ordren kan matches mot en leverandørfaktura\./);
 });
 
 test('Kredittkort lisenskjøp: Videresolgt = Ja recommends closing the order now', () => {
