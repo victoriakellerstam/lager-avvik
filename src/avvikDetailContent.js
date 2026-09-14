@@ -38,14 +38,19 @@ const DETAIL_CONTENT = {
   [IKKE_MOTTATT_FAKTURA_I_MEDIUS]: {
     summary: ikkeMottattFakturaSummary,
     procedure: () =>
-      `For å løse avviket må du sende en oppdatering til Finance med fakturanummeret, eller kontakte distributøren for å undersøke status på fakturaen. ${TEAMS_CONTACT}`,
+      'Ordren ligger fortsatt åpen ettersom vi ikke har mottatt en faktura i Medius som kan knyttes til innkjøpsordren. Gi beskjed til Finance dersom du har mottatt fakturaen, slik at den manuelle ordren kan matches mot en leverandørfaktura.',
     links: [],
   },
   [KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT]: {
     summary: (avvik) =>
       `Avviket gjelder et kredittkortkjøp som feilaktig er registrert som mottatt. Det er ${avvik.daysWaiting} dager siden mottaket ble registrert.`,
-    procedure: () =>
-      `Dersom kunden allerede er fakturert, skal ordrestatusen i Visma endres til «Motta ikke bokfør». ${TEAMS_CONTACT}`,
+    // Videresolgt = 'Ja' means the customer is already invoiced, so the
+    // order can be closed out now; 'Nei'/'Delvis' (or unknown) means that
+    // hasn't happened yet, so the procedure is to wait for it first.
+    procedure: (avvik) =>
+      avvik.resoldStatus === 'Ja'
+        ? 'Ettersom lisensen er videresolgt og kunden er fakturert, skal ordrestatusen i Visma endres til «Motta og ikke bokfør».'
+        : 'Vent til kunden er fakturert, og endre deretter ordrestatusen i Visma til «Motta og ikke bokfør».',
     links: [],
   },
   [INTERNBESTILLING]: {

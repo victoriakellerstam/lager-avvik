@@ -32,7 +32,8 @@ test('Ikke mottatt faktura i Medius: with a PO number uses the non-manual wordin
   assert.match(summary, /SO-99001/);
   assert.match(summary, /ART-123/);
   assert.match(summary, /25 dager/);
-  assert.match(procedure, /Finance/);
+  assert.match(procedure, /Ordren ligger fortsatt åpen ettersom vi ikke har mottatt en faktura i Medius som kan knyttes til innkjøpsordren\./);
+  assert.match(procedure, /Gi beskjed til Finance dersom du har mottatt fakturaen, slik at den manuelle ordren kan matches mot en leverandørfaktura\./);
 });
 
 test('Ikke mottatt faktura i Medius: without a PO number uses the manual-order wording', () => {
@@ -41,11 +42,19 @@ test('Ikke mottatt faktura i Medius: without a PO number uses the manual-order w
   assert.match(summary, /ikke kjenner statusen på fakturaen/);
 });
 
-test('Kredittkort lisenskjøp: mentions days waiting and the Visma status change', () => {
-  const avvik = baseAvvik({ discrepancyType: KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT, daysWaiting: 3 });
+test('Kredittkort lisenskjøp: Videresolgt = Ja recommends closing the order now', () => {
+  const avvik = baseAvvik({ discrepancyType: KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT, daysWaiting: 3, resoldStatus: 'Ja' });
   const { summary, procedure } = getAvvikDetailContent(avvik);
   assert.match(summary, /3 dager/);
-  assert.match(procedure, /Motta ikke bokfør/);
+  assert.match(procedure, /Ettersom lisensen er videresolgt og kunden er fakturert, skal ordrestatusen i Visma endres til «Motta og ikke bokfør»\./);
+});
+
+test('Kredittkort lisenskjøp: Videresolgt = Nei or Delvis (or unknown) recommends waiting for invoicing first', () => {
+  for (const resoldStatus of ['Nei', 'Delvis', undefined]) {
+    const avvik = baseAvvik({ discrepancyType: KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT, resoldStatus });
+    const { procedure } = getAvvikDetailContent(avvik);
+    assert.match(procedure, /Vent til kunden er fakturert, og endre deretter ordrestatusen i Visma til «Motta og ikke bokfør»\./);
+  }
 });
 
 test('Internbestilling: uses days waiting and routes to Finance', () => {
