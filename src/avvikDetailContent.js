@@ -46,7 +46,7 @@ function internbestillingFirstPoint(avvik) {
     return `Endre status i Visma til «Motta og ikke bokfør» ettersom hele antallet av SKU ${avvik.articleNumber} er skrevet ut av lager.`;
   }
   if (avvik.resoldStatus === 'Ja' || avvik.resoldStatus === 'Nei') {
-    return 'Vi trenger å matche en faktura til orderen. Gi beskjed til Finance om hvilket fakturanummer orderen gjelder, eller kontakt distributør for å undersøke status på faktura.';
+    return 'Innkjøpsordrelinjen er ikke tilknyttet en faktura. Oppgi fakturanummeret til Finance, eller kontakt distributøren for å undersøke status på faktura.';
   }
   if (avvik.resoldStatus === 'Delvis') {
     return 'Gi beskjed til Finance om det resterende antallet skal brukes internt eller om det skal skrives ut av lager.';

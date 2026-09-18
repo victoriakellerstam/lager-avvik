@@ -83,13 +83,13 @@ test('Internbestilling: fully written off (Skrevet ut av lager = Ja) recommends 
 test('Internbestilling: fully resold (Videresolgt = Ja) recommends matching an invoice', () => {
   const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, resoldStatus: 'Ja', writtenOffStatus: null });
   const { procedure } = getAvvikDetailContent(avvik);
-  assert.match(procedure, /Vi trenger å matche en faktura til orderen\./);
+  assert.match(procedure, /Innkjøpsordrelinjen er ikke tilknyttet en faktura\./);
 });
 
 test('Internbestilling: Videresolgt = Nei also recommends matching an invoice', () => {
   const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, resoldStatus: 'Nei', writtenOffStatus: null });
   const { procedure } = getAvvikDetailContent(avvik);
-  assert.match(procedure, /Vi trenger å matche en faktura til orderen\./);
+  assert.match(procedure, /Innkjøpsordrelinjen er ikke tilknyttet en faktura\./);
 });
 
 test('Internbestilling: Videresolgt = Delvis (nothing written off yet) asks Finance about the remaining quantity', () => {
