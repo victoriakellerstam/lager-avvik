@@ -66,12 +66,42 @@ test('Kredittkort lisenskjøp: Videresolgt = Nei or Delvis (or unknown) recommen
   }
 });
 
-test('Internbestilling: uses days waiting and routes to Finance', () => {
+test('Internbestilling: with no stock breakdown data, falls back to the generic wording', () => {
   const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, daysWaiting: 7 });
   const { summary, procedure } = getAvvikDetailContent(avvik);
   assert.match(summary, /internbestilling/);
   assert.match(summary, /7 dager/);
-  assert.match(procedure, /Finance/);
+  assert.match(procedure, /Gi Finance beskjed om statusen på artikkelen i ordren/);
+});
+
+test('Internbestilling: fully written off (Skrevet ut av lager = Ja) recommends the Visma status change, naming the SKU', () => {
+  const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, articleNumber: 'ART-9', writtenOffStatus: 'Ja', resoldStatus: null });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Endre status i Visma til «Motta og ikke bokfør» ettersom hele antallet av SKU ART-9 er skrevet ut av lager\./);
+});
+
+test('Internbestilling: fully resold (Videresolgt = Ja) recommends matching an invoice', () => {
+  const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, resoldStatus: 'Ja', writtenOffStatus: null });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Vi trenger å matche en faktura til orderen\./);
+});
+
+test('Internbestilling: Videresolgt = Nei also recommends matching an invoice', () => {
+  const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, resoldStatus: 'Nei', writtenOffStatus: null });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Vi trenger å matche en faktura til orderen\./);
+});
+
+test('Internbestilling: Videresolgt = Delvis (nothing written off yet) asks Finance about the remaining quantity', () => {
+  const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, resoldStatus: 'Delvis', writtenOffStatus: null });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Gi beskjed til Finance om det resterende antallet skal brukes internt eller om det skal skrives ut av lager\./);
+});
+
+test('Internbestilling: both partially resold and partially written off asks Finance about the remaining quantity', () => {
+  const avvik = baseAvvik({ discrepancyType: INTERNBESTILLING, resoldStatus: 'Delvis', writtenOffStatus: 'Delvis' });
+  const { procedure } = getAvvikDetailContent(avvik);
+  assert.match(procedure, /Gi beskjed til Finance om det resterende antallet skal brukes internt eller om det skal skrives ut av lager\./);
 });
 
 test('Varefaktura under behandling: includes SKU, order id, and days waiting', () => {

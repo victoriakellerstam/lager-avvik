@@ -35,6 +35,25 @@ function ikkeMottattFakturaSummary(avvik) {
   return `${intro} Ordrelinjen har hatt status som mottatt i Visma i ${avvik.daysWaiting} dager.`;
 }
 
+// The first Internbestilling point depends on the same stock-status fields
+// as the nøkkeltall boxes (resoldStatus/writtenOffStatus/quantities - see
+// avvikSync.js's resolveStockBreakdown): writtenOffStatus 'Ja' can only occur
+// when resoldStatus is null (isFullyWrittenOff), so checking it first and
+// then resoldStatus covers every combination with real stock data. No stock
+// data at all (both null) falls back to the original generic wording.
+function internbestillingFirstPoint(avvik) {
+  if (avvik.writtenOffStatus === 'Ja') {
+    return `Endre status i Visma til «Motta og ikke bokfør» ettersom hele antallet av SKU ${avvik.articleNumber} er skrevet ut av lager.`;
+  }
+  if (avvik.resoldStatus === 'Ja' || avvik.resoldStatus === 'Nei') {
+    return 'Vi trenger å matche en faktura til orderen. Gi beskjed til Finance om hvilket fakturanummer orderen gjelder, eller kontakt distributør for å undersøke status på faktura.';
+  }
+  if (avvik.resoldStatus === 'Delvis') {
+    return 'Gi beskjed til Finance om det resterende antallet skal brukes internt eller om det skal skrives ut av lager.';
+  }
+  return 'Gi Finance beskjed om statusen på artikkelen i ordren, slik at saken kan behandles videre.';
+}
+
 const DETAIL_CONTENT = {
   [IKKE_MOTTATT_FAKTURA_I_MEDIUS]: {
     summary: ikkeMottattFakturaSummary,
@@ -63,7 +82,7 @@ const DETAIL_CONTENT = {
   },
   [INTERNBESTILLING]: {
     summary: (avvik) => `Avviket gjelder en ordrelinje i en internbestilling som ble mottatt for ${avvik.daysWaiting} dager siden.`,
-    procedure: () => `Gi Finance beskjed om statusen på artikkelen i ordren, slik at saken kan behandles videre. ${TEAMS_CONTACT}`,
+    procedure: (avvik) => `${internbestillingFirstPoint(avvik)} ${TEAMS_CONTACT}`,
     links: [],
   },
   [VAREFAKTURA_UNDER_BEHANDLING]: {
