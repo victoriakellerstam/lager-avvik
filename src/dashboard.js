@@ -362,7 +362,7 @@ function renderTopBar() {
       <button type="button" id="nav-toggle" class="icon-button" aria-expanded="false" aria-controls="side-nav" aria-label="Åpne meny">
         <i class="fa-solid fa-bars" aria-hidden="true"></i>
       </button>
-      <span class="topbar-brand"><i class="fa-solid fa-warehouse" aria-hidden="true"></i>Lager-avvik</span>
+      <span class="topbar-brand"><i class="fa-solid fa-warehouse" aria-hidden="true"></i>Lageravvik</span>
     </div>
     <button type="button" id="settings-toggle" class="icon-button" aria-expanded="false" aria-controls="settings-panel" aria-label="Innstillinger">
       <i class="fa-solid fa-gear" aria-hidden="true"></i>
@@ -406,7 +406,6 @@ function renderSettingsPanel() {
 function renderToolbar() {
   return `
       <div class="toolbar">
-        <button type="button" id="run-job" class="bf-button bf-button-filled">Kjør ukentlig jobb nå (demo)</button>
         <button type="button" id="test-dwh" class="bf-button">Test tilkobling til dwh</button>
         <span id="test-dwh-result" class="test-dwh-result"></span>
         <button type="button" id="refresh-dwh" class="bf-button">Oppdater fra dwh</button>
@@ -427,13 +426,25 @@ const SHARED_SCRIPT = `
       if (!navToggle || !sideNav || !backdrop) return;
       const isOverlayMode = () => !window.matchMedia('(min-width: 960px)').matches;
       const isVisible = () => !document.body.classList.contains('nav-collapsed');
+      const NAV_STORAGE_KEY = 'navCollapsed';
+      function getStoredCollapsed() {
+        try { return localStorage.getItem(NAV_STORAGE_KEY); } catch (e) { return null; }
+      }
+      function setStoredCollapsed(collapsed) {
+        try { localStorage.setItem(NAV_STORAGE_KEY, collapsed ? 'true' : 'false'); } catch (e) {}
+      }
 
-      // Desktop starts docked/visible, mobile starts off-canvas/collapsed -
-      // correct the server-rendered aria-expanded="false" to match whichever
-      // is actually true before any click happens.
-      if (isOverlayMode()) {
+      // Each page load is a fresh document, so without this the nav would
+      // reset to the responsive default on every navigation. Instead, honor
+      // the user's last explicit open/close choice; only fall back to the
+      // responsive default (open on desktop, off-canvas on mobile) the very
+      // first time, before any choice has been stored.
+      const stored = getStoredCollapsed();
+      const startCollapsed = stored === null ? isOverlayMode() : stored === 'true';
+      if (startCollapsed) {
         document.body.classList.add('nav-collapsed');
       } else {
+        document.body.classList.remove('nav-collapsed');
         navToggle.setAttribute('aria-expanded', 'true');
         navToggle.setAttribute('aria-label', 'Lukk meny');
       }
@@ -442,6 +453,7 @@ const SHARED_SCRIPT = `
         document.body.classList.remove('nav-collapsed');
         navToggle.setAttribute('aria-expanded', 'true');
         navToggle.setAttribute('aria-label', 'Lukk meny');
+        setStoredCollapsed(false);
         if (isOverlayMode()) {
           backdrop.hidden = false;
           const firstLink = sideNav.querySelector('a');
@@ -453,6 +465,7 @@ const SHARED_SCRIPT = `
         navToggle.setAttribute('aria-expanded', 'false');
         navToggle.setAttribute('aria-label', 'Åpne meny');
         backdrop.hidden = true;
+        setStoredCollapsed(true);
         if (returnFocus) navToggle.focus();
       }
       navToggle.addEventListener('click', () => {
@@ -553,11 +566,6 @@ const SHARED_SCRIPT = `
         await fetch('/api/avvik/' + btn.dataset.id + '/reopen', { method: 'POST' });
         location.reload();
       });
-    });
-    const runJobBtn = document.getElementById('run-job');
-    if (runJobBtn) runJobBtn.addEventListener('click', async () => {
-      await fetch('/api/jobs/run-weekly', { method: 'POST' });
-      location.reload();
     });
     const testDwhBtn = document.getElementById('test-dwh');
     if (testDwhBtn) testDwhBtn.addEventListener('click', async () => {
@@ -910,7 +918,7 @@ function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions
 <head>
 <meta charset="utf-8">
 <script>${THEME_RESTORE_SCRIPT}</script>
-<title>${escapeHtml(title)} — Lager-avvik</title>
+<title>${escapeHtml(title)} — Lageravvik</title>
 <link rel="stylesheet" href="https://unpkg.com/@intility/bifrost-css@6.11.2/dist/bifrost-all.css">
 <link rel="stylesheet" href="/assets/app.css?v=${ASSET_CSS_VERSION}">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.0/js/solid.min.js"></script>
