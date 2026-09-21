@@ -338,18 +338,20 @@ const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discre
 // isFinanceSectionCase above: either the whole SKU quantity has been
 // written off (writtenOffStatus 'Ja', any discrepancyType), or it's a
 // Kredittkort lisenskjøp mistake where the whole quantity was resold
-// (resoldStatus 'Ja'). Evaluated over the full list rather than excluding
-// finance/no-owner cases first, so a case can legitimately show up here
-// too - deliberately not mutually exclusive with the other sections.
+// (resoldStatus 'Ja'). Takes priority over every other section below - a
+// matching case is pulled out first, so it shows up only in its own
+// section and never in Åpne avvik, Spesielle caser - Finance, or Sakseier
+// ikke funnet.
 function isVismaStatusChangeCase(a) {
   if (a.writtenOffStatus === 'Ja') return true;
   return a.discrepancyType === KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT && a.resoldStatus === 'Ja';
 }
 
 function splitAvvik(avvikList) {
-  const financeCases = avvikList.filter(isFinanceSectionCase);
   const vismaStatusChangeCases = avvikList.filter(isVismaStatusChangeCase).sort(byDaysWaitingDesc);
-  const withoutFinance = avvikList.filter((a) => !isFinanceSectionCase(a));
+  const withoutVismaStatusChange = avvikList.filter((a) => !isVismaStatusChangeCase(a));
+  const financeCases = withoutVismaStatusChange.filter(isFinanceSectionCase);
+  const withoutFinance = withoutVismaStatusChange.filter((a) => !isFinanceSectionCase(a));
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
   const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
   const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
