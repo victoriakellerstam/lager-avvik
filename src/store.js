@@ -11,6 +11,14 @@ let avvikList = [];
 let notifications = [];
 let nextNotificationId = 1;
 
+// Same >21-days/three-week threshold fetchAvvikRows itself requires before an
+// order line counts as an avvik at all (see dwhQueries.js) - reused in
+// mergeFromDwh below so a single sync where a row goes missing isn't trusted
+// as a genuine resolution on its own; it has to stay missing for this same
+// three weeks first.
+const MISSING_TO_RESOLVED_DAYS = 21;
+const MISSING_TO_RESOLVED_MS = MISSING_TO_RESOLVED_DAYS * 24 * 60 * 60 * 1000;
+
 function listAvvik() {
   return avvikList;
 }
@@ -100,17 +108,23 @@ function addComment(id, author, text) {
 //     setManualPurchaser) - a human's correction outranks dwh's answer.
 //   - id only in the fresh batch: inserted as a brand-new avvik.
 //   - id only in the existing list (missing from the fresh batch): the
-//     underlying order line no longer has order_status = 3030 - the single
-//     filter fetchAvvikRows' source query applies (see dwhQueries.js) - so
-//     the deviation is genuinely resolved upstream. Per the user, this is
-//     authoritative, not a sync hiccup to be suspicious of: if it was still
-//     open, it's auto-resolved right away (same `resolved`/`resolvedAt` a
-//     manual "Marker løst" would set) and stamped with
-//     `missingFromLastSyncAt` so it reads as "resolved because missing
-//     since" in the data. If it was already resolved, it's left alone
-//     entirely - expected to age out over time. Reappearing later clears
-//     `missingFromLastSyncAt` again, but does not auto-reopen it - a human
-//     uses "Gjenåpne" for that, same as any other resolved avvik.
+//     underlying order line no longer has order_status = 3030 - one of the
+//     filters fetchAvvikRows' source query applies (see dwhQueries.js) - but
+//     a single sync where it goes missing isn't trusted as a genuine
+//     resolution on its own, since a status can blip for reasons unrelated
+//     to actually being fixed. If it was still open, it's stamped with
+//     `missingFromLastSyncAt` on the *first* sync where it goes missing (so
+//     the field reads as "missing since", not "last checked and still
+//     missing"); only once it has stayed missing for MISSING_TO_RESOLVED_DAYS
+//     (the same three-week/21-day threshold fetchAvvikRows itself requires
+//     before an order line counts as an avvik at all) does this app trust
+//     the disappearance and auto-resolve it - same `resolved`/`resolvedAt` a
+//     manual "Marker løst" sets. If it was already resolved, it's left
+//     alone entirely - expected to age out over time. Reappearing before
+//     the three weeks are up clears `missingFromLastSyncAt` and it's never
+//     auto-resolved; reappearing after auto-resolution just clears the flag
+//     again without auto-reopening it - a human uses "Gjenåpne" for that,
+//     same as any other resolved avvik.
 function mergeFromDwh(freshAvvikRows, now = new Date()) {
   const freshById = new Map(freshAvvikRows.map((a) => [a.id, a]));
   const nowIso = now.toISOString();
@@ -145,9 +159,12 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       updated += 1;
       freshById.delete(existing.id); // consumed; anything left over is new
     } else if (!existing.resolved) {
-      existing.missingFromLastSyncAt = nowIso;
-      existing.resolved = true;
-      existing.resolvedAt = nowIso;
+      if (!existing.missingFromLastSyncAt) {
+        existing.missingFromLastSyncAt = nowIso;
+      } else if (now.getTime() - new Date(existing.missingFromLastSyncAt).getTime() >= MISSING_TO_RESOLVED_MS) {
+        existing.resolved = true;
+        existing.resolvedAt = nowIso;
+      }
       markedMissing += 1;
     }
   }
