@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
-const { KOSTNADSFAKTURA_REVERSER, MANUELL_ORDRE } = require('./discrepancyTypes');
+const { KOSTNADSFAKTURA_REVERSER, MANUELL_ORDRE, KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT } = require('./discrepancyTypes');
 const { getAvvikDetailContent } = require('./avvikDetailContent');
 
 function escapeHtml(value) {
@@ -334,15 +334,28 @@ const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
 // an avvik reached via "Mer informasjon" vs. "Dette må gjøres".
 const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discrepancyType === KOSTNADSFAKTURA_REVERSER;
 
+// A separate Finance-closes-it-in-Visma criterion, independent of
+// isFinanceSectionCase above: either the whole SKU quantity has been
+// written off (writtenOffStatus 'Ja', any discrepancyType), or it's a
+// Kredittkort lisenskjøp mistake where the whole quantity was resold
+// (resoldStatus 'Ja'). Evaluated over the full list rather than excluding
+// finance/no-owner cases first, so a case can legitimately show up here
+// too - deliberately not mutually exclusive with the other sections.
+function isVismaStatusChangeCase(a) {
+  if (a.writtenOffStatus === 'Ja') return true;
+  return a.discrepancyType === KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT && a.resoldStatus === 'Ja';
+}
+
 function splitAvvik(avvikList) {
   const financeCases = avvikList.filter(isFinanceSectionCase);
+  const vismaStatusChangeCases = avvikList.filter(isVismaStatusChangeCase).sort(byDaysWaitingDesc);
   const withoutFinance = avvikList.filter((a) => !isFinanceSectionCase(a));
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
   const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
   const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
   const open = rest.filter((a) => !a.resolved).sort(byDaysWaitingDesc);
   const resolved = rest.filter((a) => a.resolved);
-  return { financeCases, noOwnerCases, open, resolved };
+  return { financeCases, vismaStatusChangeCases, noOwnerCases, open, resolved };
 }
 
 const NAV_ITEMS = [
@@ -986,7 +999,7 @@ function renderOpenAvvikPage(avvikList, notifications) {
   return renderShell('open', 'Åpne avvik', content, { showToolbar: true });
 }
 
-function renderFinanceStats(financeCount, noOwnerCount) {
+function renderFinanceStats(financeCount, vismaStatusChangeCount, noOwnerCount) {
   return `
   <div class="stats">
     <div class="bf-card"><div class="bf-card-content">
@@ -998,6 +1011,10 @@ function renderFinanceStats(financeCount, noOwnerCount) {
       <div class="stat-label">Spesielle caser - Finance</div>
     </div></div>
     <div class="bf-card"><div class="bf-card-content">
+      <div class="stat-number">${vismaStatusChangeCount}</div>
+      <div class="stat-label">Løses av Finance – Endre status i Visma</div>
+    </div></div>
+    <div class="bf-card"><div class="bf-card-content">
       <div class="stat-number">${noOwnerCount}</div>
       <div class="stat-label">Sakseier ikke funnet</div>
     </div></div>
@@ -1005,12 +1022,13 @@ function renderFinanceStats(financeCount, noOwnerCount) {
 }
 
 function renderFinancePage(avvikList, notifications) {
-  const { financeCases, noOwnerCases } = splitAvvik(avvikList);
+  const { financeCases, vismaStatusChangeCases, noOwnerCases } = splitAvvik(avvikList);
   const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt', showPurchaserForm: true })).join('');
   const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
+  const vismaStatusChangeRows = vismaStatusChangeCases.map((a) => renderFinanceRow(a)).join('');
 
   const content = `
-    ${renderFinanceStats(financeCases.length, noOwnerCases.length)}
+    ${renderFinanceStats(financeCases.length, vismaStatusChangeCases.length, noOwnerCases.length)}
 
     <section id="finance-section">
       <div class="section-header">
@@ -1033,6 +1051,31 @@ function renderFinancePage(avvikList, notifications) {
             </tr>
           </thead>
           <tbody>${financeRows}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="visma-status-change-section">
+      <div class="section-header">
+        <h2>Løses av Finance – Endre status i Visma</h2>
+        <span class="bf-badge bfc-theme-bg">${vismaStatusChangeCases.length}</span>
+      </div>
+      <p class="section-note">Enten er hele SKU-antallet skrevet ut av lager, eller avviket er «Kredittkort lisenskjøp, feilaktig mottatt» og hele antallet er videresolgt — i begge tilfeller løser Finance saken ved å endre status direkte i Visma.</p>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th><th></th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${vismaStatusChangeRows}</tbody>
         </table>
       </div>
     </section>
