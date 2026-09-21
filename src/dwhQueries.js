@@ -933,6 +933,52 @@ async function fetchMediusLinks() {
   });
 }
 
+// A "Kostnadsfaktura" (cost invoice, invoice_type = 'Non-PO invoice') has no
+// reliable per-article line the way fetchMediusLinks above requires - either
+// it has no medius_invoice_lines rows at all, or its lines are for something
+// unrelated to the avvik's own article (freight, an unrelated SKU on the same
+// PO, etc). fetchAvvikRows' own classification query already accounts for
+// this with two PO+supplier-only match paths (no article involved) - direct
+// on the invoice head, and via the medius_order_connections bridge on
+// bestillingsnummer - confirmed against real data (4 of 6 "Kostnadsfaktura —
+// reverser" cases had no medius link because fetchMediusLinks' article-level
+// join found nothing, while this direct/bridge match did). Mirrors those same
+// two CTEs, unioned since avvikSync.js only needs one PO+supplier-keyed
+// candidate pool from them, not which path each came from.
+async function fetchMediusCostInvoiceLinks() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT
+        ih.visma_purchase_order,
+        ih.supplier_id,
+        ih.invoice_number,
+        ih.medius_link,
+        ih.processing_status,
+        ih.document_id
+      FROM [dwh].[finance].[medius_invoice_head] ih
+      WHERE ih.invoice_type = 'Non-PO invoice'
+        AND ih.visma_purchase_order IS NOT NULL
+        AND ih.medius_link IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        moc.visma_purchase_order,
+        ih.supplier_id,
+        ih.invoice_number,
+        ih.medius_link,
+        ih.processing_status,
+        ih.document_id
+      FROM [dwh].[finance].[medius_order_connections] moc
+      INNER JOIN [dwh].[finance].[medius_invoice_head] ih
+        ON ih.document_id = moc.document_id
+      WHERE moc.visma_purchase_order IS NOT NULL
+        AND ih.medius_link IS NOT NULL
+    `);
+    return result.recordset;
+  });
+}
+
 // Videresolgt/Skrevet ut av lager breakdown per lot_number, from
 // type_of_change on stock_history:
 // - total_quantity: SUM of positive quantity (received) - also the
@@ -997,6 +1043,7 @@ module.exports = {
   fetchIntilityUsers,
   fetchDepartments,
   fetchMediusLinks,
+  fetchMediusCostInvoiceLinks,
   fetchStockMovementBreakdownByLot,
   fetchOrderDeviations,
 };

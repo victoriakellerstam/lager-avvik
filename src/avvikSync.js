@@ -22,6 +22,13 @@ function buildMediusLinkKey(poNumber, articleNumber, supplierIdText) {
   return [poNumber, articleNumber, supplierIdText].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
 
+// Same idea as buildMediusLinkKey, but for fetchMediusCostInvoiceLinks
+// candidates - a Kostnadsfaktura match has no article to key on, only
+// PO+supplier (see dwhQueries.js's fetchMediusCostInvoiceLinks).
+function buildMediusCostLinkKey(poNumber, supplierIdText) {
+  return [poNumber, supplierIdText].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
+}
+
 // Archived first, any other valid/active status next (e.g. Open), then
 // Invalidated last - the exact processing_status values already relied on
 // elsewhere in this pipeline (see dwhQueries.js's fetchAvvikRows
@@ -35,20 +42,26 @@ function mediusInvoicePriority(processingStatus) {
 }
 
 // Picks one medius_invoice_head row out of several candidates that all
-// matched the same PO+article+supplier (see fetchMediusLinks/
-// buildMediusLinkKey) - a lone candidate is always kept as-is, whatever its
-// status, so a single Invalidated invoice still surfaces exactly like
-// before this existed. document_id is a stable, always-same-result tiebreak
-// between two candidates of the same status - it's a COLLATE'd string key
-// in this data model, not a confirmed date/recency field, so this is not a
-// "pick the newest" claim, only a deterministic one.
+// matched the same key (see fetchMediusLinks/buildMediusLinkKey, or
+// fetchMediusCostInvoiceLinks/buildMediusCostLinkKey) - a lone candidate is
+// always kept as-is, whatever its status, so a single Invalidated invoice
+// still surfaces exactly like before this existed. document_id is a stable,
+// always-same-result tiebreak between two candidates of the same status -
+// it's a COLLATE'd string key in this data model, not a confirmed date/
+// recency field, so this is not a "pick the newest" claim, only a
+// deterministic one. Confirmed against real data that a Kostnadsfaktura
+// invoice_head row can have a NULL document_id (no medius_invoice_lines join
+// to source one from) - invoice_number is the fallback tiebreak for that
+// case, same "deterministic, not recency" caveat applies.
 function pickBestMediusInvoice(candidates) {
   return candidates.reduce((best, candidate) => {
     if (!best) return candidate;
     const bestPriority = mediusInvoicePriority(best.processing_status);
     const candidatePriority = mediusInvoicePriority(candidate.processing_status);
     if (candidatePriority !== bestPriority) return candidatePriority < bestPriority ? candidate : best;
-    return String(candidate.document_id) > String(best.document_id) ? candidate : best;
+    const bestKey = String(best.document_id ?? best.invoice_number);
+    const candidateKey = String(candidate.document_id ?? candidate.invoice_number);
+    return candidateKey > bestKey ? candidate : best;
   }, null);
 }
 
@@ -144,6 +157,7 @@ async function syncAvvikFromDwh() {
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
   const departments = await dwhQueries.fetchDepartments();
   const mediusLinks = await dwhQueries.fetchMediusLinks();
+  const mediusCostInvoiceLinks = await dwhQueries.fetchMediusCostInvoiceLinks();
   const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot();
   const orderDeviations = await dwhQueries.fetchOrderDeviations();
 
@@ -167,6 +181,22 @@ async function syncAvvikFromDwh() {
   }
   const mediusInfoByKey = new Map(
     [...mediusCandidatesByKey.entries()].map(([key, candidates]) => {
+      const best = pickBestMediusInvoice(candidates);
+      return [key, { invoiceNumber: best.invoice_number, mediusLink: best.medius_link }];
+    })
+  );
+  // Kostnadsfaktura fallback: no article to key on, only PO+supplier (see
+  // dwhQueries.js's fetchMediusCostInvoiceLinks and buildMediusCostLinkKey
+  // above) - only consulted below when the exact PO+article+supplier lookup
+  // finds nothing, so it never overrides a real line-level match.
+  const mediusCostCandidatesByKey = new Map();
+  for (const m of mediusCostInvoiceLinks) {
+    const key = buildMediusCostLinkKey(m.visma_purchase_order, m.supplier_id);
+    if (!mediusCostCandidatesByKey.has(key)) mediusCostCandidatesByKey.set(key, []);
+    mediusCostCandidatesByKey.get(key).push(m);
+  }
+  const mediusCostInfoByKey = new Map(
+    [...mediusCostCandidatesByKey.entries()].map(([key, candidates]) => {
       const best = pickBestMediusInvoice(candidates);
       return [key, { invoiceNumber: best.invoice_number, mediusLink: best.medius_link }];
     })
@@ -198,9 +228,12 @@ async function syncAvvikFromDwh() {
       departmentByFullName.get(normalizeFullNameForMatching(purchaserName)) ||
       departmentNameByNumber.get(row.department_number) ||
       null;
-    const mediusInfo = mediusInfoByKey.get(
-      buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)
-    );
+    // Line-level PO+article+supplier match first (goods invoices); if that
+    // finds nothing, fall back to the PO+supplier-only Kostnadsfaktura match
+    // - a cost invoice reversal isn't tied to this specific article line.
+    const mediusInfo =
+      mediusInfoByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) ||
+      mediusCostInfoByKey.get(buildMediusCostLinkKey(row.po_number, row.supplier_id_text));
     const stockBreakdown = resolveStockBreakdown(row.lot_number, stockBreakdownByLot);
 
     avvikRows.push({
@@ -260,4 +293,5 @@ module.exports = {
   resolveWrittenOffStatus,
   pickBestMediusInvoice,
   buildMediusLinkKey,
+  buildMediusCostLinkKey,
 };

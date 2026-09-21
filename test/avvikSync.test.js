@@ -8,6 +8,7 @@ const {
   resolveWrittenOffStatus,
   pickBestMediusInvoice,
   buildMediusLinkKey,
+  buildMediusCostLinkKey,
 } = require('../src/avvikSync');
 
 function breakdownMap(lotNumber, totalQuantity, resoldQuantity, writtenOffQuantity) {
@@ -182,4 +183,32 @@ test('pickBestMediusInvoice: Archived still wins over an Open candidate', () => 
   const archived = { invoice_number: 'INV-8', medius_link: 'https://medius/archived', processing_status: 'Archived', document_id: 'D1' };
   const open = { invoice_number: 'INV-8', medius_link: 'https://medius/open', processing_status: 'Open', document_id: 'D2' };
   assert.deepEqual(pickBestMediusInvoice([open, archived]), archived);
+});
+
+// Confirmed against real dwh data (PO 148789's two "Non-PO invoice"
+// candidates): a Kostnadsfaktura invoice_head row can have document_id
+// NULL - the fallback to invoice_number must still pick deterministically,
+// regardless of input order.
+test('pickBestMediusInvoice: falls back to invoice_number when document_id is null on both candidates (Kostnadsfaktura case)', () => {
+  const a = { invoice_number: '8281495964', medius_link: 'https://medius/a', processing_status: 'Archived', document_id: null };
+  const b = { invoice_number: '8281668350', medius_link: 'https://medius/b', processing_status: 'Archived', document_id: null };
+
+  const pickA = pickBestMediusInvoice([a, b]);
+  const pickB = pickBestMediusInvoice([b, a]);
+  assert.deepEqual(pickA, pickB);
+  assert.deepEqual(pickA, b); // higher invoice_number, per the documented fallback tiebreak
+});
+
+// Scenario: a Kostnadsfaktura reversal matched via PO+supplier only (see
+// dwhQueries.js's fetchMediusCostInvoiceLinks) - no article involved, unlike
+// buildMediusLinkKey.
+test('buildMediusCostLinkKey: same PO+supplier collide into the same key regardless of article', () => {
+  const key = buildMediusCostLinkKey('PO-1', 'SUPPLIER-A');
+  assert.equal(key, buildMediusCostLinkKey('PO-1', 'SUPPLIER-A'));
+});
+
+test('buildMediusCostLinkKey: different suppliers for the same PO never collide into the same key', () => {
+  const keyA = buildMediusCostLinkKey('PO-1', 'SUPPLIER-A');
+  const keyB = buildMediusCostLinkKey('PO-1', 'SUPPLIER-B');
+  assert.notEqual(keyA, keyB);
 });
