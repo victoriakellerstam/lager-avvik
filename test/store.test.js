@@ -63,7 +63,7 @@ test('mergeFromDwh: an id not seen before is inserted with fresh local-state def
   assert.deepEqual(inserted.comments, []);
 });
 
-test('mergeFromDwh: an open avvik missing from a fresh fetch is kept, not deleted, and flagged missing', () => {
+test('mergeFromDwh: an open avvik missing from a fresh fetch is kept (not deleted), auto-resolved, and flagged missing', () => {
   const [existing] = store.listAvvik();
   const before = store.listAvvik().length;
   const unresolvedCountBefore = store.listAvvik().filter((a) => !a.resolved).length;
@@ -71,9 +71,14 @@ test('mergeFromDwh: an open avvik missing from a fresh fetch is kept, not delete
   const result = store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
 
   assert.equal(store.listAvvik().length, before, 'nothing should ever be deleted');
-  assert.equal(store.getAvvik(existing.id).missingFromLastSyncAt, '2026-08-20T00:00:00.000Z');
-  // Only the already-unresolved seed avvik get flagged - the seeded resolved
-  // one (see mockData.js) must not be touched at all.
+  const after = store.getAvvik(existing.id);
+  assert.equal(after.missingFromLastSyncAt, '2026-08-20T00:00:00.000Z');
+  // The order line no longer has order_status = 3030, so this counts as
+  // genuinely resolved upstream - not just flagged missing.
+  assert.equal(after.resolved, true);
+  assert.equal(after.resolvedAt, '2026-08-20T00:00:00.000Z');
+  // Only the already-unresolved seed avvik get auto-resolved - the seeded
+  // resolved one (see mockData.js) must not be touched at all.
   assert.equal(result.markedMissing, unresolvedCountBefore);
 });
 
@@ -99,14 +104,19 @@ test('mergeFromDwh: a previously-resolved avvik missing from a fresh fetch is le
   assert.equal(after.missingFromLastSyncAt, undefined, 'a resolved avvik should not get the missing-flag at all');
 });
 
-test('mergeFromDwh: an avvik that was flagged missing clears the flag if it reappears', () => {
+test('mergeFromDwh: an avvik that was flagged missing clears the flag if it reappears, but stays auto-resolved', () => {
   const [existing] = store.listAvvik();
   store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
   assert.ok(store.getAvvik(existing.id).missingFromLastSyncAt);
+  assert.equal(store.getAvvik(existing.id).resolved, true);
 
   store.mergeFromDwh([freshRow({ id: existing.id })], new Date('2026-08-27T00:00:00.000Z'));
 
-  assert.equal(store.getAvvik(existing.id).missingFromLastSyncAt, null);
+  const after = store.getAvvik(existing.id);
+  assert.equal(after.missingFromLastSyncAt, null);
+  // Reappearing clears the missing-flag but doesn't auto-reopen it - same as
+  // any other resolved avvik, a human uses "Gjenåpne" for that.
+  assert.equal(after.resolved, true);
 });
 
 test('mergeFromDwh: a manually-corrected purchaser survives a later refresh, everything else still updates', () => {

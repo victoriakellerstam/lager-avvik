@@ -332,7 +332,13 @@ const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
 // but keeps its own discrepancyType/badge rather than being relabeled. Also
 // used by renderAvvikDetailPage to pick the right active side-nav item for
 // an avvik reached via "Mer informasjon" vs. "Dette må gjøres".
-const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discrepancyType === KOSTNADSFAKTURA_REVERSER;
+// !a.resolved matters here (mirrors isOpenNoOwner below): once a case is
+// resolved - whether by clicking "Marker løst" or automatically because the
+// order line no longer has order_status = 3030 (see store.js's
+// mergeFromDwh) - it must fall through to the shared open/resolved split
+// below instead of lingering in this section forever, so it ends up in
+// Arkiv like every other resolved case.
+const isFinanceSectionCase = (a) => !a.resolved && (isFinanceCase(a.discrepancyType) || a.discrepancyType === KOSTNADSFAKTURA_REVERSER);
 
 // A separate Finance-closes-it-in-Visma criterion, independent of
 // isFinanceSectionCase above: either the whole SKU quantity has been
@@ -341,8 +347,10 @@ const isFinanceSectionCase = (a) => isFinanceCase(a.discrepancyType) || a.discre
 // (resoldStatus 'Ja'). Takes priority over every other section below - a
 // matching case is pulled out first, so it shows up only in its own
 // section and never in Åpne avvik, Spesielle caser - Finance, or Sakseier
-// ikke funnet.
+// ikke funnet. Same !a.resolved reasoning as isFinanceSectionCase above -
+// once resolved, it drops out of this section too and ends up in Arkiv.
 function isVismaStatusChangeCase(a) {
+  if (a.resolved) return false;
   if (a.writtenOffStatus === 'Ja') return true;
   return a.discrepancyType === KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT && a.resoldStatus === 'Ja';
 }
@@ -1257,6 +1265,13 @@ function renderArchivePage(avvikList, notifications) {
   const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
 
   const content = `
+    <div class="stats">
+      <div class="bf-card"><div class="bf-card-content">
+        <div class="stat-number">${resolved.length}</div>
+        <div class="stat-label">Antall løst</div>
+      </div></div>
+    </div>
+
     <details class="archive" open>
       <summary class="bf-link">Arkiv — løste avvik (${resolved.length})</summary>
       <div class="section-card">

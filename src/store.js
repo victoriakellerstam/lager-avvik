@@ -92,21 +92,25 @@ function addComment(id, author, text) {
 // Reconciles a fresh batch of dwh-derived avvik (see src/avvikSync.js) into
 // the existing in-memory list, keyed by each row's synthetic `id`. This is
 // the only place dwh data ever touches the store, and it deliberately never
-// deletes anything - a row missing from a fresh fetch could mean it was
-// genuinely resolved upstream, or could mean a sync hiccup, and this app has
-// no undo, so disappearance is treated as suspect rather than authoritative:
+// deletes anything:
 //   - id in both: overwrite the dwh-derived fields, but never touch
 //     `resolved`/`resolvedAt`/`lastNotifiedAt`/`comments` - those are owned
 //     entirely by the warehouse team, not dwh. Same for purchaserName/
 //     purchaserEmail once purchaserManuallySet is true (see
 //     setManualPurchaser) - a human's correction outranks dwh's answer.
 //   - id only in the fresh batch: inserted as a brand-new avvik.
-//   - id only in the existing list (missing from the fresh batch): if it was
-//     still open, it's left in place untouched but stamped with
-//     `missingFromLastSyncAt` (only on the *first* sync where it goes
-//     missing, so the field reads as "missing since", not "last checked and
-//     still missing"); cleared again if it reappears. If it was already
-//     resolved, it's left alone entirely - expected to age out over time.
+//   - id only in the existing list (missing from the fresh batch): the
+//     underlying order line no longer has order_status = 3030 - the single
+//     filter fetchAvvikRows' source query applies (see dwhQueries.js) - so
+//     the deviation is genuinely resolved upstream. Per the user, this is
+//     authoritative, not a sync hiccup to be suspicious of: if it was still
+//     open, it's auto-resolved right away (same `resolved`/`resolvedAt` a
+//     manual "Marker løst" would set) and stamped with
+//     `missingFromLastSyncAt` so it reads as "resolved because missing
+//     since" in the data. If it was already resolved, it's left alone
+//     entirely - expected to age out over time. Reappearing later clears
+//     `missingFromLastSyncAt` again, but does not auto-reopen it - a human
+//     uses "Gjenåpne" for that, same as any other resolved avvik.
 function mergeFromDwh(freshAvvikRows, now = new Date()) {
   const freshById = new Map(freshAvvikRows.map((a) => [a.id, a]));
   const nowIso = now.toISOString();
@@ -140,8 +144,10 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.missingFromLastSyncAt = null;
       updated += 1;
       freshById.delete(existing.id); // consumed; anything left over is new
-    } else if (!existing.resolved && !existing.missingFromLastSyncAt) {
+    } else if (!existing.resolved) {
       existing.missingFromLastSyncAt = nowIso;
+      existing.resolved = true;
+      existing.resolvedAt = nowIso;
       markedMissing += 1;
     }
   }
