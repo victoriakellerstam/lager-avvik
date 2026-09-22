@@ -34,9 +34,9 @@ on the avvik here. It exists to show the concept, not to send anything real:
   purchasers by number of avvik, so the team can see where to focus.
 - Avvik are split into three views: an "Åpne avvik" list (top, with filters
   by order, purchaser, and discrepancy type - client-side, and they combine),
-  a "Spesielle caser - Finance" table, and a collapsed "Arkiv" of resolved
-  avvik at the bottom (its date column shows when each was resolved, not
-  when it was last notified). Finance cases are never emailed to a purchaser
+  a "Spesielle caser - Finance" table, and an always-visible "Arkiv" of
+  resolved avvik (its date column shows when each was resolved, not when it
+  was last notified). Finance cases are never emailed to a purchaser
   (`src/financeTypes.js` - `needsNotification` skips them entirely), so
   instead of an email-preview column that table shows a "Fremgangsmåte"
   (resolution procedure) built from the same instruction steps that would

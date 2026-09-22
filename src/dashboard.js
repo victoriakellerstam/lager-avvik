@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
-const { KOSTNADSFAKTURA_REVERSER, MANUELL_ORDRE, KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT } = require('./discrepancyTypes');
+const { KOSTNADSFAKTURA_REVERSER, KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT } = require('./discrepancyTypes');
 const { getAvvikDetailContent } = require('./avvikDetailContent');
 
 function escapeHtml(value) {
@@ -32,49 +32,6 @@ function renderNotificationHistory(avvikId, notifications) {
       (n) => `<li>${new Date(n.sentAt).toLocaleString('no-NO')} — varslet <strong>${escapeHtml(n.to)}</strong></li>`
     )
     .join('');
-}
-
-// A hidden row directly under a data row, toggled by clicking anywhere on
-// that row that isn't itself interactive (see the .avvik-row click handler
-// in SHARED_SCRIPT). colSpan must match the number of <td>s the calling
-// row-renderer produces, or the table columns misalign.
-function renderDetailRow(a, colSpan, { actionLabel } = {}) {
-  const mediusLinkHtml = a.mediusLink
-    ? `<a class="bf-link" href="${escapeHtml(a.mediusLink)}" target="_blank" rel="noopener noreferrer">Vis faktura i Medius</a>`
-    : '<span class="section-note">Ingen Medius-lenke funnet for denne linjen.</span>';
-  const ticketUrlHtml = a.ticketUrl
-    ? `<a class="bf-link" href="${escapeHtml(a.ticketUrl)}" target="_blank" rel="noopener noreferrer">Vis saken</a>`
-    : '<span class="section-note">Ingen sak funnet for denne linjen.</span>';
-  // Manuelle ordre har ingen PO-nummer i det hele tatt - vis ikke feltet for
-  // denne typen i stedet for en tom "—".
-  const poNumberHtml =
-    a.discrepancyType === MANUELL_ORDRE
-      ? ''
-      : `<div><strong>PO-nummer:</strong> ${a.poNumber ? escapeHtml(a.poNumber) : '—'}</div>`;
-  // The primary action - placed before PO-nummer and styled distinctly
-  // (border + theme color, not the bf-button-filled variant, since a page
-  // can have several rows expanded and Bifrost only allows one filled
-  // button per page) so it reads as the main thing to do with this row.
-  // actionLabel differs by row type: "Dette må gjøres" for actionable
-  // open-avvik/no-owner rows, "Mer informasjon" for Finance-only rows (see
-  // renderAvvikRow/renderFinanceRow) - both link to the same detail page.
-  const actionHtml = actionLabel
-    ? `<div class="detail-action"><a class="bf-button action-primary" href="/avvik/${encodeURIComponent(a.id)}">
-        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i> ${escapeHtml(actionLabel)}
-      </a></div>`
-    : '';
-  return `<tr class="detail-row" hidden><td colspan="${colSpan}">
-      <div class="detail-grid">
-        ${actionHtml}
-        ${poNumberHtml}
-        <div><strong>SKU (artikkelnummer):</strong> ${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</div>
-        <div><strong>Partinummer:</strong> ${a.lotNumber ? escapeHtml(a.lotNumber) : '—'}</div>
-        <div><strong>Fakturanummer:</strong> ${a.invoiceNumber ? escapeHtml(a.invoiceNumber) : '—'}</div>
-        <div><strong>Videresolgt:</strong> ${a.resoldStatus ? escapeHtml(a.resoldStatus) : '—'}</div>
-        <div>${mediusLinkHtml}</div>
-        <div>${ticketUrlHtml}</div>
-      </div>
-    </td></tr>`;
 }
 
 // Shared ring-segment math for both donuts below: each segment is one
@@ -263,13 +220,14 @@ function renderAvvikRow(
         <pre class="email-preview" data-id="${a.id}" hidden></pre>
       </td>`
     : '';
-  // Base cells always present: order, purchaser, department, type badge,
-  // days waiting, comments - plus whichever optional cells are switched on
-  // above (sku/date/action/notified), so colSpan below always matches the
-  // actual number of <td>s regardless of which options this call passed.
-  const colSpan = 6 + (showSku ? 1 : 0) + (showDateColumn ? 1 : 0) + (actionCell ? 1 : 0) + (notifiedCell ? 1 : 0);
+  // data-href/tabindex make the whole row navigate straight to this avvik's
+  // "Dette må gjøres" detail page (see the .avvik-row handler in
+  // SHARED_SCRIPT) - the row used to expand a detail panel with the same
+  // link inline instead; that panel's fields all already appear on the
+  // detail page itself (renderAvvikDetailPage), so nothing is lost by
+  // navigating straight there.
   return `
-    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       ${skuCell}
       <td>${purchaserCell}</td>
@@ -290,7 +248,7 @@ function renderAvvikRow(
         </details>
       </td>
       ${notifiedCell}
-    </tr>${renderDetailRow(a, colSpan, { actionLabel: 'Dette må gjøres' })}`;
+    </tr>`;
 }
 
 // Finance-only cases never get an email, so there's no email-preview UI here.
@@ -299,7 +257,7 @@ function renderAvvikRow(
 // cases alongside genuine Spesielle caser - Finance ones.
 function renderFinanceRow(a) {
   return `
-    <tr class="avvik-row" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
@@ -317,7 +275,7 @@ function renderFinanceRow(a) {
         </details>
       </td>
       <td>${a.resolved ? '' : `<button type="button" data-id="${a.id}" class="bf-button bf-button-small resolve">Marker løst</button>`}</td>
-    </tr>${renderDetailRow(a, 7, { actionLabel: 'Mer informasjon' })}`;
+    </tr>`;
 }
 
 // The two literal fallback names dwhQueries.js's ground-truth query produces
@@ -567,14 +525,22 @@ const SHARED_SCRIPT = `
       });
     })();
 
-    // Clicking anywhere on an avvik row that isn't itself interactive
-    // toggles a hidden detail row (PO-nummer, SKU, Medius-lenke) right below it.
-    document.querySelectorAll('.avvik-row').forEach((row) => {
+    // Clicking (or pressing Enter/Space while focused on) an avvik row that
+    // isn't itself interactive navigates straight to that avvik's detail
+    // page - the same target as its old "Dette må gjøres"/"Mer informasjon"
+    // link, just without an intermediate expand step. A <tr> isn't natively
+    // clickable/focusable, hence tabindex + the explicit keydown handling.
+    document.querySelectorAll('.avvik-row[data-href]').forEach((row) => {
+      const isOwnInteractive = (e) => e.target.closest('button, a, input, textarea, form, details, summary');
       row.addEventListener('click', (e) => {
-        if (e.target.closest('button, a, input, textarea, form, details, summary')) return;
-        const detail = row.nextElementSibling;
-        if (detail && detail.classList.contains('detail-row')) {
-          detail.hidden = !detail.hidden;
+        if (isOwnInteractive(e)) return;
+        window.location.href = row.dataset.href;
+      });
+      row.addEventListener('keydown', (e) => {
+        if (isOwnInteractive(e)) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          window.location.href = row.dataset.href;
         }
       });
     });
@@ -686,7 +652,7 @@ const SHARED_SCRIPT = `
     });
     // Each section with a filter row is scoped independently, so identically-
     // named filter boxes in different sections/pages don't clobber each other.
-    document.querySelectorAll('#open-section, #finance-section, #no-owner-section, details.archive').forEach((section) => {
+    document.querySelectorAll('#open-section, #finance-section, #no-owner-section, #archive-section').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
       // Only #open-section has a matching stat card - null elsewhere, and
       // every use below is guarded on it.
@@ -702,12 +668,7 @@ const SHARED_SCRIPT = `
         rows.forEach((row) => {
           const match = Object.keys(filters).every((col) => row.dataset[col].includes(filters[col]));
           row.hidden = !match;
-          if (match) {
-            visibleCount++;
-          } else {
-            const detail = row.nextElementSibling;
-            if (detail && detail.classList.contains('detail-row')) detail.hidden = true;
-          }
+          if (match) visibleCount++;
         });
         if (filteredCountEl) {
           const hasFilter = Object.keys(filters).length > 0;
@@ -810,8 +771,6 @@ const SHARED_STYLE = `
   .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
   .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px var(--bfc-shadow); }
   .section-card .bf-table { margin: 0; }
-  details.archive > summary { font-size: var(--bf-font-size-l); font-weight: 600; }
-  details.archive .section-card { margin-top: var(--bfs16); }
   details summary { cursor: pointer; }
   ul.comments, ul.notif-history { list-style: none; padding: 0; margin: var(--bfs8) 0; }
   ul.comments li, ul.notif-history li { padding: var(--bfs4) 0; border-bottom: var(--bf-border); font-size: var(--bf-font-size-s); }
@@ -844,14 +803,13 @@ const SHARED_STYLE = `
   circle.clickable:hover { opacity: 0.8; }
   .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
   .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
+  /* Row itself navigates to the avvik's detail page (see the .avvik-row
+     handler in SHARED_SCRIPT) - hover/focus-visible make that obvious
+     without relying on cursor alone. outline-offset is negative since a
+     <tr> has no padding of its own to draw the outline into. */
   .avvik-row { cursor: pointer; }
-  .detail-row td { background: var(--bfc-base-2); padding: var(--bfs16); }
-  .detail-grid { display: flex; gap: var(--bfs32); flex-wrap: wrap; font-size: var(--bf-font-size-s); }
-  /* Full-width so it reads as the primary action, not just another field in
-     the flex row, and always the first thing (see renderDetailRow). */
-  .detail-action { flex: 1 1 100%; order: -1; }
-  .action-primary { border: 2px solid var(--bfc-theme); color: var(--bfc-theme); font-weight: 600; }
-  .action-primary:hover { background: var(--bfc-theme-fade); }
+  .avvik-row:hover { background: var(--bfc-theme-fade); }
+  .avvik-row:focus-visible { outline: 2px solid var(--bfc-theme); outline-offset: -2px; }
 
   .back-link { display: inline-flex; align-items: center; gap: var(--bfs8); min-height: 44px; color: var(--bfc-base-c); text-decoration: none; margin-bottom: var(--bfs16); }
   .back-link:hover { text-decoration: underline; }
@@ -1166,10 +1124,11 @@ function renderProcedureSteps(procedure) {
   return `<ul class="procedure-steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`;
 }
 
-// Detail page for a single avvik/ordrelinje, reached from "Dette må gjøres"
-// on the open-avvik row panel (see renderDetailRow). Info cards, the header
-// icon links, and links all hide themselves rather than rendering an empty
-// card/field/placeholder when a value is missing.
+// Detail page for a single avvik/ordrelinje, reached by clicking its row (or
+// its old "Dette må gjøres"/"Mer informasjon" action) anywhere it appears -
+// open avvik, Finance, or Arkiv. Info cards, the header icon links, and
+// links all hide themselves rather than rendering an empty card/field/
+// placeholder when a value is missing.
 function renderAvvikDetailPage(avvik) {
   const { procedure, links, note } = getAvvikDetailContent(avvik);
 
@@ -1262,7 +1221,11 @@ function renderAvvikDetailPage(avvik) {
 
 function renderArchivePage(avvikList, notifications) {
   const { resolved } = splitAvvik(avvikList);
-  const resolvedRows = resolved.map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt' })).join('');
+  // showNotifiedColumn: false drops "Varsling på e-post" - resolved avvik
+  // are no longer notified, and the column isn't relevant in the archive.
+  const resolvedRows = resolved
+    .map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt', showNotifiedColumn: false }))
+    .join('');
 
   const content = `
     <div class="stats">
@@ -1272,12 +1235,15 @@ function renderArchivePage(avvikList, notifications) {
       </div></div>
     </div>
 
-    <details class="archive" open>
-      <summary class="bf-link">Arkiv — løste avvik (${resolved.length})</summary>
+    <section id="archive-section">
+      <div class="section-header">
+        <h2>Arkiv — løste avvik</h2>
+        <span class="bf-badge bfc-theme-bg">${resolved.length}</span>
+      </div>
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th><th>Varsling på e-post</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
@@ -1287,13 +1253,12 @@ function renderArchivePage(avvikList, notifications) {
               <th></th>
               <th></th>
               <th></th>
-              <th></th>
             </tr>
           </thead>
           <tbody>${resolvedRows}</tbody>
         </table>
       </div>
-    </details>`;
+    </section>`;
 
   return renderShell('archive', 'Arkiv', content);
 }

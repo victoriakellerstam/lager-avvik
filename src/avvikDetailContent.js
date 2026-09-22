@@ -24,9 +24,8 @@ const SKRIV_UT_SAK_LINK = {
 // signal here - MANUELL_ORDRE is already a separate, mutually exclusive
 // discrepancyType (see discrepancyTypes.js/scenario.js), so a row classified
 // as IKKE_MOTTATT_FAKTURA_I_MEDIUS is never also MANUELL_ORDRE. Instead this
-// reuses the system's existing manual-order signal: dashboard.js's
-// renderDetailRow already treats a missing poNumber as "this is a manual
-// order" (manual orders have no PO number at all).
+// reuses the system's existing manual-order signal: manual orders have no
+// PO number at all, so a missing poNumber means "this is a manual order".
 function ikkeMottattFakturaSummary(avvik) {
   const isManual = !avvik.poNumber;
   const intro = isManual
@@ -119,8 +118,8 @@ const DETAIL_NOTES = {
 };
 
 // Types with no dedicated variant here - including the Finance-only types,
-// reached via renderFinanceRow's "Mer informasjon" button - fall back to
-// instructions.js's per-type text, which already covers every
+// reached via a Finance-section row (dashboard.js's renderFinanceRow) - fall
+// back to instructions.js's per-type text, which already covers every
 // discrepancyType plus a default.
 function getAvvikDetailContent(avvik) {
   const entry = DETAIL_CONTENT[avvik.discrepancyType];
