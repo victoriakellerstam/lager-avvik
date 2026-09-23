@@ -899,8 +899,20 @@ const SHARED_STYLE = `
      task's "minimum 14px, unngå lys grå tekst" - text here always stays
      full-contrast (--bfc-base-c), never the dimmed tone used for secondary
      info elsewhere on this page. */
+  /* Same heading treatment as "Anbefalt fremgangsmåte" (.procedure-section
+     h2 above), so the two section headings read as equally important. */
+  .invoice-suggestions-section h2 { font-size: var(--bf-font-size-h2); margin: 0 0 var(--bfs16); }
   .suggestions-toggle { display: inline-flex; align-items: center; gap: var(--bfs8); }
   .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); margin-top: var(--bfs16); }
+  /* [hidden] alone loses to the class rule above (same specificity, and the
+     author stylesheet comes after the UA one) - this makes the JS toggle's
+     list.hidden actually hide the content, instead of `display: flex`
+     silently overriding it and leaving every suggestion visible regardless
+     of the toggle button's state. */
+  .invoice-suggestions[hidden] { display: none; }
+  @media (max-width: 480px) {
+    .invoice-suggestions-section h2 { font-size: var(--bf-font-size-h3); }
+  }
   .invoice-suggestion-card { border-width: 2px; border-style: solid; font-size: 14px; color: var(--bfc-base-c); }
   .suggestion-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bfs12); }
   .suggestion-invoice-number { font-weight: 700; }
