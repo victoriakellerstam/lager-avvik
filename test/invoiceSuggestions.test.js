@@ -11,7 +11,8 @@ const {
   quantitiesMatch,
   amountsMatch,
   qualifiesForManualOrderSuggestion,
-  isInvoiceTooOldForManualOrder,
+  isInvoiceCreatedBeforeOrder,
+  headHasVismaPurchaseOrder,
   pickBestInvoiceLineForInvoice,
   pickArchivedInvoiceHead,
   buildInvoiceSuggestion,
@@ -88,17 +89,26 @@ test('qualifiesForManualOrderSuggestion: requires quantity and amount (within kr
   assert.equal(qualifiesForManualOrderSuggestion(orderLine, { article_code: 'X1', quantity: 2, amount: 2931.62 }), false);
 });
 
-test('isInvoiceTooOldForManualOrder: an invoice archived before the cutoff is too old', () => {
-  assert.equal(isInvoiceTooOldForManualOrder('2024-11-04', '2026-01-01'), true);
+test('isInvoiceCreatedBeforeOrder: an invoice created before the order date cannot belong to it', () => {
+  assert.equal(isInvoiceCreatedBeforeOrder('2024-11-04', '2026-01-06'), true);
+  assert.equal(isInvoiceCreatedBeforeOrder('2026-02-05', '2026-02-09'), true); // Eksempel 5's near-miss candidate
 });
 
-test('isInvoiceTooOldForManualOrder: an invoice archived on/after the cutoff is not too old', () => {
-  assert.equal(isInvoiceTooOldForManualOrder('2025-01-02', '2026-01-01'), false);
-  assert.equal(isInvoiceTooOldForManualOrder('2026-01-01', '2026-01-01'), false);
+test('isInvoiceCreatedBeforeOrder: an invoice created on/after the order date is fine', () => {
+  assert.equal(isInvoiceCreatedBeforeOrder('2026-01-06', '2026-01-06'), false);
+  assert.equal(isInvoiceCreatedBeforeOrder('2026-02-09', '2026-02-09'), false);
 });
 
-test('isInvoiceTooOldForManualOrder: a missing date is not treated as too old', () => {
-  assert.equal(isInvoiceTooOldForManualOrder(null, '2026-01-01'), false);
+test('isInvoiceCreatedBeforeOrder: a missing date on either side is not treated as too old', () => {
+  assert.equal(isInvoiceCreatedBeforeOrder(null, '2026-01-06'), false);
+  assert.equal(isInvoiceCreatedBeforeOrder('2026-01-06', null), false);
+});
+
+test('headHasVismaPurchaseOrder: a non-empty visma_purchase_order means the invoice already belongs to another PO', () => {
+  assert.equal(headHasVismaPurchaseOrder({ visma_purchase_order: '145808' }), true);
+  assert.equal(headHasVismaPurchaseOrder({ visma_purchase_order: '' }), false);
+  assert.equal(headHasVismaPurchaseOrder({ visma_purchase_order: null }), false);
+  assert.equal(headHasVismaPurchaseOrder({}), false);
 });
 
 test('pickBestInvoiceLineForInvoice: prefers the line with more matching fields', () => {
@@ -253,6 +263,7 @@ test('buildInvoiceSuggestionsForAvvik: Eksempel 1 - invoice already connected vi
   const suggestions = buildInvoiceSuggestionsForAvvik({
     orderLine,
     referenceId: '145718-487650',
+    orderDate: '2026-01-01',
     candidates: [candidate],
     invoiceHeadCandidatesByNumber,
   });
@@ -275,6 +286,7 @@ test('buildInvoiceSuggestionsForAvvik: Eksempel 2 - mismatched Visma order with 
   const suggestions = buildInvoiceSuggestionsForAvvik({
     orderLine,
     referenceId: '145372-485100',
+    orderDate: '2026-01-01',
     candidates: [invoiceLine],
     invoiceHeadCandidatesByNumber,
   });
@@ -347,6 +359,7 @@ test('buildInvoiceSuggestionsForAvvik: manual order excludes wrong-article/old c
   const suggestions = buildInvoiceSuggestionsForAvvik({
     orderLine,
     referenceId: '', // manual order - empty reference_id
+    orderDate: '2026-01-01',
     candidates: [wrongCandidate, rightCandidate],
     invoiceHeadCandidatesByNumber,
   });
@@ -358,7 +371,7 @@ test('buildInvoiceSuggestionsForAvvik: manual order excludes wrong-article/old c
   assert.equal(suggestions[0].referenceVismaOrder, null);
 });
 
-test('buildInvoiceSuggestionsForAvvik: manual order candidate archived before the 2026 cutoff is excluded even if everything else matches', () => {
+test('buildInvoiceSuggestionsForAvvik: manual order candidate created before the order date is excluded even if everything else matches', () => {
   const orderLine = { article_code: 'X1', supplier_id: '1', quantity: 1, amount: 100 };
   const candidate = { invoice_number: 'OLD-1', article_code: 'X1', supplier_id: '1', quantity: 1, amount: 100, connection_status: 'Empty', line_number: '1' };
   const invoiceHeadCandidatesByNumber = new Map([
@@ -368,12 +381,74 @@ test('buildInvoiceSuggestionsForAvvik: manual order candidate archived before th
   const suggestions = buildInvoiceSuggestionsForAvvik({
     orderLine,
     referenceId: null,
+    orderDate: '2026-01-01',
     candidates: [candidate],
     invoiceHeadCandidatesByNumber,
   });
 
   assert.deepEqual(suggestions, []);
 });
+
+// Eksempel 5: manual order 306794 - a candidate matching article/quantity/
+// amount perfectly must still be excluded when its own medius_invoice_head
+// row already carries a visma_purchase_order (it belongs to a different,
+// real PO) or was created before the order itself.
+test('buildInvoiceSuggestionsForAvvik: Eksempel 5 - manual order excludes a matching candidate that already has its own PO reference', () => {
+  const orderLine = {
+    purchase_order: '306794',
+    article_code: 'NRS-00458',
+    article_name: 'MICROSOFT Comm EHS+2YR on 2YR Mfg Wty/NO',
+    supplier_id: '59025',
+    supplier_name: 'Tech Data Norge AS',
+    quantity: 2,
+    unit_price: 1701.01,
+    amount: 3402.02,
+  };
+  // Matches article/quantity/amount exactly, but is excluded on two
+  // independent grounds: it already has a visma_purchase_order of its own,
+  // and it was archived before the order was even created.
+  const nearMissCandidate = {
+    invoice_number: '8278872970',
+    article_code: 'NRS-00458',
+    supplier_id: '59025',
+    quantity: 2,
+    unit_price: 1701.01,
+    amount: 3402.02,
+    connection_status: 'Empty',
+    line_number: '1',
+  };
+  const invoiceHeadCandidatesByNumber = new Map([
+    [
+      '8278872970',
+      [
+        {
+          invoice_number: '8278872970',
+          processing_status: 'Archived',
+          medius_link: 'x',
+          visma_purchase_order: '145808', // already tied to a real PO
+          created_at: '2026-02-05', // before the order's own 2026-02-09
+        },
+      ],
+    ],
+  ]);
+
+  const suggestions = buildInvoiceSuggestionsForAvvik({
+    orderLine,
+    referenceId: '', // manual order
+    orderDate: '2026-02-09',
+    candidates: [nearMissCandidate],
+    invoiceHeadCandidatesByNumber,
+  });
+
+  assert.deepEqual(suggestions, []);
+});
+
+// The wrong-article invoice from the same Eksempel 5 (8278955486, article
+// A-FLEX-3?BDL...) is excluded by the ordinary article-match requirement -
+// covered generically by the "wrong article" assertions in
+// qualifiesForManualOrderSuggestion's own tests above, since the candidate
+// pool passed into buildInvoiceSuggestionsForAvvik is already scoped to one
+// article+supplier by avvikSync.js before this function ever sees it.
 
 test('buildInvoiceSuggestionsForAvvik: a candidate with no Archived medius_invoice_head row at all is never suggested', () => {
   const orderLine = { article_code: 'X1', supplier_id: '1', quantity: 1, amount: 100 };

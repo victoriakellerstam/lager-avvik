@@ -1,7 +1,5 @@
 'use strict';
 
-const { MAIN_TABLE_CUTOFF_DATE } = require('./dwhQueries');
-
 // "Forslag til faktura som må kobles til ordrelinjen": for an avvik whose
 // order line has no (or an incomplete) invoice match yet, look for an
 // unconnected medius_invoice_lines candidate that's likely the missing
@@ -29,14 +27,20 @@ const { MAIN_TABLE_CUTOFF_DATE } = require('./dwhQueries');
 //   at all): quantity and amount agreement becomes the qualifying filter
 //   itself, not just a grading signal, and article_code must match exactly
 //   - this is the strictest path since there's no order-reference signal to
-//   fall back on. Invoices archived before the app's own order-data cutoff
-//   (MAIN_TABLE_CUTOFF_DATE) are never suggested here, so a stale invoice
-//   from a previous year can't surface for a current-year manual order.
+//   fall back on. A candidate whose own medius_invoice_head row already
+//   carries a visma_purchase_order is excluded outright: that invoice is
+//   already tied to some other PO, which a manual order (having none) can
+//   never be the right match for.
 //
-// In both scenarios, a candidate is only ever considered at all once a
-// medius_invoice_head row for its invoice_number is confirmed Archived
-// (pickArchivedInvoiceHead) - an Invalidated-only invoice_number is never
-// suggested.
+// In both scenarios:
+// - A candidate is only ever considered at all once a medius_invoice_head
+//   row for its invoice_number is confirmed Archived (pickArchivedInvoiceHead)
+//   - an Invalidated-only invoice_number is never suggested.
+// - A candidate whose invoice was created before the order line's own
+//   order_date is excluded - it can't belong to an order that didn't exist
+//   yet.
+// - article_code must match the order line's own article_code exactly -
+//   never inferred from supplier/date/PO alone, for either scenario.
 
 function normalizeKey(value) {
   return String(value ?? '').trim().toLowerCase();
@@ -110,15 +114,22 @@ function qualifiesForManualOrderSuggestion(orderLine, candidate) {
   );
 }
 
-// A manual-order candidate's invoice must have been archived on/after the
-// same cutoff the rest of the app already applies to order data
-// (dwhQueries.js's MAIN_TABLE_CUTOFF_DATE) - otherwise a stale invoice from
-// a previous year (no order-reference to rule it out with) can surface for
-// a current order. A missing createdAt is not treated as "too old" - there's
-// nothing to judge it against, so it's left to the other match criteria.
-function isInvoiceTooOldForManualOrder(createdAt, cutoffDate = MAIN_TABLE_CUTOFF_DATE) {
-  if (!createdAt) return false;
-  return new Date(createdAt) < new Date(cutoffDate);
+// A candidate invoice created before the order line's own order_date can't
+// genuinely belong to it - an order can't be invoiced before it existed.
+// Applies to both scenarios. Missing data on either side is not treated as
+// "too old" - there's nothing to judge it against, so it's left to the
+// other match criteria.
+function isInvoiceCreatedBeforeOrder(invoiceCreatedAt, orderDate) {
+  if (!invoiceCreatedAt || !orderDate) return false;
+  return new Date(invoiceCreatedAt) < new Date(orderDate);
+}
+
+// A manual order has no PO at all, so an invoice whose own medius_invoice_
+// head row already carries a visma_purchase_order is necessarily tied to
+// some other (real) order - it can never be the right match here, however
+// well article/quantity/amount happen to agree.
+function headHasVismaPurchaseOrder(head) {
+  return normalizeKey(head.visma_purchase_order) !== '';
 }
 
 // How well one candidate invoice line matches the order line - used only to
@@ -257,17 +268,19 @@ function rankInvoiceSuggestions(suggestions, limit = 5) {
 
 /**
  * Full suggestion pipeline for one avvik: keep only candidates with a
- * confirmed Archived medius_invoice_head row, then exclude already-order-
- * connected candidates (normal order) or hard-filter to exact article +
- * quantity+amount matches within the cutoff (manual order), collapse to one
- * suggestion per invoice_number, then rank and cap. Returns [] whenever
- * there's nothing to suggest - dashboard.js hides the section entirely in
- * that case.
+ * confirmed Archived medius_invoice_head row created on/after the order's
+ * own order_date, then exclude already-order-connected candidates (normal
+ * order) or hard-filter to exact article + quantity+amount matches with no
+ * PO of their own (manual order), collapse to one suggestion per
+ * invoice_number, then rank and cap. Returns [] whenever there's nothing to
+ * suggest - dashboard.js hides the section entirely in that case.
  * @param {object|null} orderLine - a medius_order_lines row (see
  *   avvikSync.js's mediusOrderLineByKey), or null if none was found.
  * @param {string|null|undefined} referenceId - the order line's raw
  *   supplier_order_line.reference_id (avvik source data) - empty/null means
  *   a manual order.
+ * @param {Date|string|null|undefined} orderDate - the order line's own
+ *   supplier_order_line.order_date (avvik source data).
  * @param {object[]} candidates - unconnected medius_invoice_lines rows
  *   already matched on article+supplier (see avvikSync.js).
  * @param {Map<string,object[]>} invoiceHeadCandidatesByNumber - normalized
@@ -275,27 +288,27 @@ function rankInvoiceSuggestions(suggestions, limit = 5) {
  *   avvikSync.js) - resolved to a single Archived row per invoice_number
  *   here via pickArchivedInvoiceHead.
  */
-function buildInvoiceSuggestionsForAvvik({ orderLine, referenceId, candidates, invoiceHeadCandidatesByNumber }) {
+function buildInvoiceSuggestionsForAvvik({ orderLine, referenceId, orderDate, candidates, invoiceHeadCandidatesByNumber }) {
   if (!orderLine) return [];
 
   // Only a candidate whose invoice_number has a confirmed Archived
-  // medius_invoice_head row is ever eligible - an Invalidated-only invoice
-  // is never suggested (Steg 4).
+  // medius_invoice_head row, created on/after the order itself, is ever
+  // eligible - an Invalidated-only invoice is never suggested (Steg 4), and
+  // an invoice older than the order can't belong to it (krav #12).
   const withHead = candidates
     .map((candidate) => {
       const head = pickArchivedInvoiceHead(invoiceHeadCandidatesByNumber.get(normalizeKey(candidate.invoice_number)) || []);
       return head ? { candidate, head } : null;
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(({ head }) => !isInvoiceCreatedBeforeOrder(head.created_at, orderDate));
   if (withHead.length === 0) return [];
 
   const isManual = isManualOrder(referenceId);
   const poNumber = isManual ? null : extractVismaOrderFromReference(referenceId);
 
   const eligible = isManual
-    ? withHead.filter(
-        ({ candidate, head }) => qualifiesForManualOrderSuggestion(orderLine, candidate) && !isInvoiceTooOldForManualOrder(head.created_at)
-      )
+    ? withHead.filter(({ candidate, head }) => qualifiesForManualOrderSuggestion(orderLine, candidate) && !headHasVismaPurchaseOrder(head))
     : withHead.filter(({ candidate }) => !matchesVismaOrder(candidate.visma_purchase_order, poNumber));
   if (eligible.length === 0) return [];
 
@@ -324,7 +337,8 @@ module.exports = {
   quantitiesMatch,
   amountsMatch,
   qualifiesForManualOrderSuggestion,
-  isInvoiceTooOldForManualOrder,
+  isInvoiceCreatedBeforeOrder,
+  headHasVismaPurchaseOrder,
   pickBestInvoiceLineForInvoice,
   pickArchivedInvoiceHead,
   buildInvoiceSuggestion,

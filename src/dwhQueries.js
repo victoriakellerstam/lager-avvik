@@ -1103,17 +1103,18 @@ async function fetchUnconnectedInvoiceLines() {
   });
 }
 
-// One direct Medius link + type + archive date per invoice_number, for an
-// invoice suggestion's "Åpne i Medius" button, "Varefaktura"/"Kostnadsfaktura"
-// label, and (for a manual order) the too-old-invoice cutoff - keyed purely
-// by invoice_number, unlike fetchMediusLinks/fetchMediusCostInvoiceLinks
-// elsewhere in this file, which key by PO/supplier because they're matching
-// an avvik's own order, not looking up an already-known invoice number.
-// medius_invoice_head can have more than one row per invoice_number (e.g. an
-// Archived one and an Invalidated one, sometimes even with different
-// invoice_type values) - avvikSync.js keeps only the Archived one
-// (invoiceSuggestions.js's pickArchivedInvoiceHead); a candidate with no
-// Archived row at all is never suggested.
+// One direct Medius link + type + archive date + own Visma-order reference
+// per invoice_number, for an invoice suggestion's "Åpne i Medius" button,
+// "Varefaktura"/"Kostnadsfaktura" label, the invoice-created-before-order
+// exclusion, and (for a manual order) the "already tied to some other PO"
+// exclusion - keyed purely by invoice_number, unlike fetchMediusLinks/
+// fetchMediusCostInvoiceLinks elsewhere in this file, which key by PO/
+// supplier because they're matching an avvik's own order, not looking up an
+// already-known invoice number. medius_invoice_head can have more than one
+// row per invoice_number (e.g. an Archived one and an Invalidated one,
+// sometimes even with different invoice_type values) - avvikSync.js keeps
+// only the Archived one (invoiceSuggestions.js's pickArchivedInvoiceHead); a
+// candidate with no Archived row at all is never suggested.
 async function fetchMediusInvoiceHeadByNumber() {
   return withPool(async (pool) => {
     const result = await pool.request().query(`
@@ -1121,6 +1122,7 @@ async function fetchMediusInvoiceHeadByNumber() {
         invoice_number,
         invoice_type,
         medius_link,
+        visma_purchase_order,
         processing_status,
         created_at,
         document_id
@@ -1142,5 +1144,4 @@ module.exports = {
   fetchMediusOrderLines,
   fetchUnconnectedInvoiceLines,
   fetchMediusInvoiceHeadByNumber,
-  MAIN_TABLE_CUTOFF_DATE,
 };

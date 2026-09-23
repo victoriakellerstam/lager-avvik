@@ -269,9 +269,15 @@ async function syncAvvikFromDwh() {
     // Line-level PO+article+supplier match first (goods invoices); if that
     // finds nothing, fall back to the PO+supplier-only Kostnadsfaktura match
     // - a cost invoice reversal isn't tied to this specific article line.
-    const mediusInfo =
-      mediusInfoByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) ||
-      mediusCostInfoByKey.get(buildMediusCostLinkKey(row.po_number, row.supplier_id_text));
+    // Neither lookup runs at all for a manual order (no po_number): a manual
+    // order has no PO to key either lookup on, so any coincidental match
+    // (e.g. an invoice whose visma_purchase_order happens to also be an
+    // empty string) would be a false "koblet til ordren" link the order
+    // never actually has - confirmed as a real bug against order 306794.
+    const mediusInfo = row.po_number
+      ? mediusInfoByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) ||
+        mediusCostInfoByKey.get(buildMediusCostLinkKey(row.po_number, row.supplier_id_text))
+      : null;
     const stockBreakdown = resolveStockBreakdown(row.lot_number, stockBreakdownByLot);
 
     // "Forslag til faktura som må kobles til ordrelinjen": only meaningful
@@ -284,6 +290,7 @@ async function syncAvvikFromDwh() {
     const invoiceSuggestions = buildInvoiceSuggestionsForAvvik({
       orderLine,
       referenceId: row.reference_id,
+      orderDate: row.order_date,
       candidates: invoiceCandidates,
       invoiceHeadCandidatesByNumber,
     });
