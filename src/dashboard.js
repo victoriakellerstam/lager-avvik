@@ -906,9 +906,9 @@ const SHARED_STYLE = `
   .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); margin-top: var(--bfs16); }
   /* [hidden] alone loses to the class rule above (same specificity, and the
      author stylesheet comes after the UA one) - this makes the JS toggle's
-     list.hidden actually hide the content, instead of `display: flex`
-     silently overriding it and leaving every suggestion visible regardless
-     of the toggle button's state. */
+     list.hidden actually hide the content, instead of the plain display:flex
+     rule silently overriding it and leaving every suggestion visible
+     regardless of the toggle button's state. */
   .invoice-suggestions[hidden] { display: none; }
   @media (max-width: 480px) {
     .invoice-suggestions-section h2 { font-size: var(--bf-font-size-h3); }
