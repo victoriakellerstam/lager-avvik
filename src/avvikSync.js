@@ -305,6 +305,10 @@ async function syncAvvikFromDwh() {
       department,
       purchaserName,
       purchaserEmail,
+      // Leverandør key figure - sourced from medius_order_lines (the same
+      // orderLine already resolved above for invoice suggestions), not
+      // supplier_order_line, per the task's own table mapping.
+      supplierName: orderLine ? orderLine.supplier_name : null,
       discrepancyType,
       createdAt: toIso(row.order_date),
       daysWaiting: row.days_waiting,

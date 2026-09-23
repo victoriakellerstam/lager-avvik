@@ -221,6 +221,7 @@ function buildInvoiceSuggestion({ orderLine, poNumber, invoiceLine, head, isManu
     strength,
     invoiceNumber: invoiceLine.invoice_number,
     invoiceTypeLabel: INVOICE_TYPE_LABEL[head.invoice_type] || null,
+    invoiceCreatedAt: head.created_at || null,
     mediusLink: head.medius_link || null,
     articleCode: invoiceLine.article_code,
     articleName: invoiceLine.article_name || orderLine.article_name || null,

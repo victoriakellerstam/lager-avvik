@@ -172,7 +172,11 @@ function buildExample2() {
     quantity_not_connected_to_purchase_order_line: 1,
     amount_not_connected_to_purchase_order_line: 571.01,
   };
-  const head = { invoice_type: 'PO invoice', medius_link: 'https://cloud.mediusflow.com:443/intility/#Tasks/ShowDocument/1' };
+  const head = {
+    invoice_type: 'PO invoice',
+    medius_link: 'https://cloud.mediusflow.com:443/intility/#Tasks/ShowDocument/1',
+    created_at: '2026-01-15',
+  };
   return { orderLine, invoiceLine, head };
 }
 
@@ -188,6 +192,7 @@ test('buildInvoiceSuggestion: Eksempel 2 (qty+amount match, Visma order mismatch
   assert.equal(suggestion.referenceVismaOrder, '145372');
   assert.equal(suggestion.invoiceVismaOrder, '143279');
   assert.equal(suggestion.invoiceTypeLabel, 'Varefaktura');
+  assert.equal(suggestion.invoiceCreatedAt, '2026-01-15');
   assert.equal(suggestion.mediusLink, head.medius_link);
 });
 

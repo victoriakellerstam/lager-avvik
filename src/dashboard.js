@@ -525,6 +525,27 @@ const SHARED_SCRIPT = `
       });
     })();
 
+    // "Forslag til faktura" on the avvik detail page starts collapsed (see
+    // renderInvoiceSuggestions) - a plain show/hide toggle, not present at
+    // all when there's nothing to suggest.
+    (function () {
+      const toggle = document.getElementById('invoice-suggestions-toggle');
+      const list = document.getElementById('invoice-suggestions-list');
+      if (!toggle || !list) return;
+      const label = toggle.querySelector('.suggestions-toggle-label');
+      const icon = toggle.querySelector('i');
+      toggle.addEventListener('click', () => {
+        const willShow = list.hidden;
+        list.hidden = !willShow;
+        toggle.setAttribute('aria-expanded', String(willShow));
+        if (label) label.textContent = willShow ? 'Skjul forslag' : 'Vis forslag';
+        if (icon) {
+          icon.classList.toggle('fa-chevron-down', !willShow);
+          icon.classList.toggle('fa-chevron-up', willShow);
+        }
+      });
+    })();
+
     // Clicking (or pressing Enter/Space while focused on) an avvik row that
     // isn't itself interactive navigates straight to that avvik's detail
     // page - the same target as its old "Dette må gjøres"/"Mer informasjon"
@@ -878,7 +899,8 @@ const SHARED_STYLE = `
      task's "minimum 14px, unngå lys grå tekst" - text here always stays
      full-contrast (--bfc-base-c), never the dimmed tone used for secondary
      info elsewhere on this page. */
-  .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); }
+  .suggestions-toggle { display: inline-flex; align-items: center; gap: var(--bfs8); }
+  .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); margin-top: var(--bfs16); }
   .invoice-suggestion-card { border-width: 2px; border-style: solid; font-size: 14px; color: var(--bfc-base-c); }
   .suggestion-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bfs12); }
   .suggestion-invoice-number { font-weight: 700; }
@@ -1233,7 +1255,7 @@ function renderOneInvoiceSuggestion(suggestion) {
     <div class="bf-card invoice-suggestion-card tone-border-${badge.tone}"><div class="bf-card-content">
       <div class="suggestion-header">
         <span class="bf-badge bfc-${badge.tone}-bg"><i class="fa-solid ${badge.icon}" aria-hidden="true"></i> ${escapeHtml(badge.label)}</span>
-        <span class="suggestion-invoice-number">Faktura: ${suggestionValue(suggestion.invoiceNumber)}${suggestion.invoiceTypeLabel ? ` (${suggestionValue(suggestion.invoiceTypeLabel)})` : ''}</span>
+        <span class="suggestion-invoice-number">Faktura: ${suggestionValue(suggestion.invoiceNumber)}${suggestion.invoiceTypeLabel ? ` (${suggestionValue(suggestion.invoiceTypeLabel)})` : ''}${suggestion.invoiceCreatedAt ? ` – ${suggestionValue(new Date(suggestion.invoiceCreatedAt).toLocaleDateString('no-NO'))}` : ''}</span>
         ${mediusLinkHtml}
       </div>
       <div class="suggestion-subheader ${articleCls}">
@@ -1253,14 +1275,22 @@ function renderOneInvoiceSuggestion(suggestion) {
 // Hidden entirely when there's nothing to suggest - an empty array means no
 // unconnected invoice-line candidate matched this avvik's order line at all
 // (see avvikSync.js/invoiceSuggestions.js), per the task's "skjul seksjonen
-// helt" rather than an empty section.
+// helt" rather than an empty section. When there is something to suggest,
+// the card list itself still starts collapsed behind a toggle button (see
+// the SHARED_SCRIPT handler) - a nice-to-have detail, not something that
+// needs to be on screen by default every time. Only one such section ever
+// exists per page load (one avvik per detail page), so a plain id is safe
+// here, unlike the per-row toggles elsewhere on this page.
 function renderInvoiceSuggestions(avvik) {
   const suggestions = avvik.invoiceSuggestions || [];
   if (!suggestions.length) return '';
   return `
     <section class="detail-page-section invoice-suggestions-section">
       <h2>Forslag til faktura som må kobles til ordrelinjen</h2>
-      <div class="invoice-suggestions">${suggestions.map(renderOneInvoiceSuggestion).join('')}</div>
+      <button type="button" id="invoice-suggestions-toggle" class="bf-button bf-button-small suggestions-toggle" aria-expanded="false" aria-controls="invoice-suggestions-list">
+        <span class="suggestions-toggle-label">Vis forslag</span> <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+      </button>
+      <div id="invoice-suggestions-list" class="invoice-suggestions" hidden>${suggestions.map(renderOneInvoiceSuggestion).join('')}</div>
     </section>`;
 }
 
@@ -1281,6 +1311,8 @@ function renderAvvikDetailPage(avvik) {
     renderInfoCard('PO-nummer', avvik.poNumber, avvikTone),
     renderInfoCard('Innkjøpsordrenummer', avvik.orderId, avvikTone),
     renderInfoCard('SKU', avvik.articleNumber, avvikTone),
+    renderInfoCard('Leverandør', avvik.supplierName, avvikTone),
+    renderInfoCard('Bestillingsdato', avvik.createdAt ? new Date(avvik.createdAt).toLocaleDateString('no-NO') : null, avvikTone),
     renderInfoCard('Type avvik', avvik.discrepancyType, avvikTone),
     renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, avvikTone),
     renderInfoCard('Partinummer', avvik.lotNumber, avvikTone),
