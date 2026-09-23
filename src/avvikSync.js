@@ -240,21 +240,17 @@ async function syncAvvikFromDwh() {
     invoiceLineCandidatesByKey.get(key).push(line);
   }
   // Keyed purely by invoice_number (see dwhQueries.js's
-  // fetchMediusInvoiceHeadByNumber) for the "Åpne i Medius" link on a
-  // suggestion - reuses pickBestMediusInvoice for the same Archived-over-
-  // Invalidated dedup already used everywhere else in this file.
+  // fetchMediusInvoiceHeadByNumber) for a suggestion's Medius link,
+  // fakturatype, and archive date - kept as raw grouped candidates, not
+  // deduped here, since only an Archived row ever qualifies an invoice for
+  // suggestion at all (see invoiceSuggestions.js's pickArchivedInvoiceHead,
+  // called per avvik below).
   const invoiceHeadCandidatesByNumber = new Map();
   for (const h of mediusInvoiceHeadRows) {
     const key = String(h.invoice_number ?? '').trim().toLowerCase();
     if (!invoiceHeadCandidatesByNumber.has(key)) invoiceHeadCandidatesByNumber.set(key, []);
     invoiceHeadCandidatesByNumber.get(key).push(h);
   }
-  const mediusLinkByInvoiceNumber = new Map(
-    [...invoiceHeadCandidatesByNumber.entries()].map(([key, candidates]) => [
-      key,
-      pickBestMediusInvoice(candidates).medius_link,
-    ])
-  );
 
   const avvikRows = [];
   for (const row of rows) {
@@ -287,9 +283,9 @@ async function syncAvvikFromDwh() {
       : [];
     const invoiceSuggestions = buildInvoiceSuggestionsForAvvik({
       orderLine,
-      poNumber: row.po_number,
+      referenceId: row.reference_id,
       candidates: invoiceCandidates,
-      mediusLinkByInvoiceNumber,
+      invoiceHeadCandidatesByNumber,
     });
 
     avvikRows.push({

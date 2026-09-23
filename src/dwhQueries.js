@@ -1103,21 +1103,26 @@ async function fetchUnconnectedInvoiceLines() {
   });
 }
 
-// One direct Medius link per invoice_number, for the "Åpne i Medius" button
-// on an invoice suggestion (see invoiceSuggestions.js) - keyed purely by
-// invoice_number, unlike fetchMediusLinks/fetchMediusCostInvoiceLinks
+// One direct Medius link + type + archive date per invoice_number, for an
+// invoice suggestion's "Åpne i Medius" button, "Varefaktura"/"Kostnadsfaktura"
+// label, and (for a manual order) the too-old-invoice cutoff - keyed purely
+// by invoice_number, unlike fetchMediusLinks/fetchMediusCostInvoiceLinks
 // elsewhere in this file, which key by PO/supplier because they're matching
 // an avvik's own order, not looking up an already-known invoice number.
 // medius_invoice_head can have more than one row per invoice_number (e.g. an
-// Archived one and an Invalidated one) - avvikSync.js dedupes with the
-// existing pickBestMediusInvoice (Archived wins, same as everywhere else).
+// Archived one and an Invalidated one, sometimes even with different
+// invoice_type values) - avvikSync.js keeps only the Archived one
+// (invoiceSuggestions.js's pickArchivedInvoiceHead); a candidate with no
+// Archived row at all is never suggested.
 async function fetchMediusInvoiceHeadByNumber() {
   return withPool(async (pool) => {
     const result = await pool.request().query(`
       SELECT
         invoice_number,
+        invoice_type,
         medius_link,
         processing_status,
+        created_at,
         document_id
       FROM [dwh].[finance].[medius_invoice_head]
       WHERE medius_link IS NOT NULL
@@ -1137,4 +1142,5 @@ module.exports = {
   fetchMediusOrderLines,
   fetchUnconnectedInvoiceLines,
   fetchMediusInvoiceHeadByNumber,
+  MAIN_TABLE_CUTOFF_DATE,
 };

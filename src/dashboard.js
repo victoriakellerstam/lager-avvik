@@ -1233,7 +1233,7 @@ function renderOneInvoiceSuggestion(suggestion) {
     <div class="bf-card invoice-suggestion-card tone-border-${badge.tone}"><div class="bf-card-content">
       <div class="suggestion-header">
         <span class="bf-badge bfc-${badge.tone}-bg"><i class="fa-solid ${badge.icon}" aria-hidden="true"></i> ${escapeHtml(badge.label)}</span>
-        <span class="suggestion-invoice-number">Faktura: ${suggestionValue(suggestion.invoiceNumber)}</span>
+        <span class="suggestion-invoice-number">Faktura: ${suggestionValue(suggestion.invoiceNumber)}${suggestion.invoiceTypeLabel ? ` (${suggestionValue(suggestion.invoiceTypeLabel)})` : ''}</span>
         ${mediusLinkHtml}
       </div>
       <div class="suggestion-subheader ${articleCls}">
