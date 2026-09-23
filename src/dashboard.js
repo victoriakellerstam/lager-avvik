@@ -869,28 +869,32 @@ const SHARED_STYLE = `
     .procedure-card .bf-card-content { padding: var(--bfs16); }
     .procedure-steps { font-size: var(--bf-font-size-m); }
   }
-  /* One card per candidate invoice (see renderOneInvoiceSuggestion) - the
-     border carries strength the same way tone-border-<tone> already does for
-     the info cards/procedure-card (success = sterkt forslag, warning =
-     svakt). Three source-table sub-groups sit side by side on wide screens
-     and stack on narrow ones, same content-sized-grow approach as
-     .info-cards above. */
+  /* One compact card per candidate invoice (see renderOneInvoiceSuggestion) -
+     the border carries strength the same way tone-border-<tone> already
+     does for the info cards/procedure-card (success = sterkt forslag,
+     warning = svakt/manuell). A single flowing comparison, not three
+     separate order/leverandørordre/faktura boxes. font-size is set
+     explicitly to a 14px floor rather than reusing --bf-font-size-s, per the
+     task's "minimum 14px, unngå lys grå tekst" - text here always stays
+     full-contrast (--bfc-base-c), never the dimmed tone used for secondary
+     info elsewhere on this page. */
   .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); }
-  .invoice-suggestion-card { border-width: 2px; border-style: solid; }
-  .suggestion-groups { display: flex; flex-wrap: wrap; gap: var(--bfs24); margin-top: var(--bfs16); }
-  .suggestion-group { flex: 1 1 14rem; min-width: 14rem; }
-  .suggestion-group h3 { font-size: var(--bf-font-size-m); margin: 0 0 var(--bfs8); }
-  .suggestion-group dl { margin: 0; display: flex; flex-direction: column; gap: var(--bfs4); font-size: var(--bf-font-size-s); }
-  .suggestion-group dl > div { display: flex; justify-content: space-between; gap: var(--bfs12); border-bottom: var(--bf-border); padding-bottom: var(--bfs2); }
-  .suggestion-group dt { color: var(--bfc-base-c-dimmed); }
-  .suggestion-group dd { margin: 0; text-align: right; font-weight: 600; }
-  .suggestion-reasons { margin-top: var(--bfs24); font-size: var(--bf-font-size-s); }
-  .suggestion-reasons ul { list-style: none; margin: var(--bfs8) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
-  .suggestion-reasons li { display: flex; align-items: flex-start; gap: var(--bfs8); }
-  .reason-ok i { color: var(--bfc-success); }
-  .reason-warn i { color: var(--bfc-warning); }
+  .invoice-suggestion-card { border-width: 2px; border-style: solid; font-size: 14px; color: var(--bfc-base-c); }
+  .suggestion-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bfs12); }
+  .suggestion-invoice-number { font-weight: 700; }
+  .suggestion-subheader { display: flex; align-items: center; gap: var(--bfs8); margin-top: var(--bfs8); }
+  .suggestion-subheader.compare-match { font-weight: 700; }
+  .suggestion-compare { display: flex; flex-direction: column; gap: var(--bfs4); margin-top: var(--bfs16); }
+  .compare-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bfs12); padding: var(--bfs4) 0; border-bottom: var(--bf-border); }
+  .compare-label { flex: 0 0 7rem; color: var(--bfc-base-c); font-weight: 600; }
+  .compare-value { flex: 1 1 10rem; }
+  .compare-row.compare-match .compare-value { font-weight: 700; }
+  .compare-match i, .suggestion-subheader.compare-match i { color: var(--bfc-success); }
+  .compare-mismatch i, .suggestion-subheader.compare-mismatch i { color: var(--bfc-warning); }
+  .suggestion-meta { margin-top: var(--bfs12); color: var(--bfc-base-c); }
+  .suggestion-reason { margin: var(--bfs16) 0 0; line-height: 1.6; }
   @media (max-width: 480px) {
-    .suggestion-group { flex: 1 1 100%; }
+    .compare-label { flex-basis: 100%; }
   }`;
 
 // Runs before the stylesheet/body so a stored preference applies with no
@@ -1148,8 +1152,7 @@ function renderProcedureSteps(procedure) {
 }
 
 // "—" for a missing suggestion field, consistent with hasValue/renderInfoCard
-// above, but simpler since a suggestion card always shows every field (no
-// hide-the-whole-card behavior at the field level, unlike the info cards).
+// above.
 function suggestionValue(value) {
   return value === null || value === undefined || value === '' ? '—' : escapeHtml(String(value));
 }
@@ -1162,80 +1165,88 @@ function formatAmount(value) {
   return Number(value).toFixed(2).replace('.', ',');
 }
 
-function renderSuggestionField(label, value) {
-  return `<div><dt>${label}</dt><dd>${value}</dd></div>`;
+const SUGGESTION_BADGE = {
+  strong: { tone: 'success', label: 'Sterkt forslag', icon: 'fa-circle-check' },
+  weak: { tone: 'warning', label: 'Svakt forslag – krever manuell sjekk', icon: 'fa-triangle-exclamation' },
+  manual: { tone: 'warning', label: 'Svakt forslag – manuell ordre', icon: 'fa-triangle-exclamation' },
+};
+
+// One side-by-side order-vs-faktura row - bold (and a check icon) when the
+// two values agree, plain weight (and a warning icon) when they don't, per
+// the task's "fet skrift for samsvarende verdier" rule. Both values always
+// render in full-contrast text (never the dimmed --bfc-base-c-dimmed used
+// elsewhere for secondary info), so a mismatch still reads clearly rather
+// than fading out.
+function renderCompareRow(label, orderValue, invoiceValue, matches) {
+  const cls = matches ? 'compare-match' : 'compare-mismatch';
+  const icon = matches ? 'fa-check' : 'fa-triangle-exclamation';
+  return `<div class="compare-row ${cls}">
+    <span class="compare-label">${escapeHtml(label)}</span>
+    <span class="compare-value">Ordre: ${suggestionValue(orderValue)}</span>
+    <span class="compare-value">Faktura: ${suggestionValue(invoiceValue)}</span>
+    <i class="fa-solid ${icon}" aria-hidden="true"></i>
+  </div>`;
 }
 
-// The three source-table cards inside one suggestion (see
-// invoiceSuggestions.js's buildInvoiceSuggestion for where every field here
-// comes from). orderLine is the only part that can be missing entirely (see
-// avvikSync.js) - the card is then omitted rather than shown full of dashes.
+// One compact card per candidate invoice (see invoiceSuggestions.js's
+// buildInvoiceSuggestion for where every field here comes from) - a single
+// flowing comparison rather than three separate order/leverandørordre/
+// faktura boxes, per the task's redesign.
 function renderOneInvoiceSuggestion(suggestion) {
-  const tone = suggestion.strength === 'strong' ? 'success' : 'warning';
-  const badgeLabel = suggestion.strength === 'strong' ? 'Sterkt forslag' : 'Svakt forslag – krever manuell sjekk';
-
-  const orderLineGroup = suggestion.orderLine
-    ? `<div class="suggestion-group">
-        <h3>Ordrelinje (medius_order_lines)</h3>
-        <dl>
-          ${renderSuggestionField('Ordrenummer (PO)', suggestionValue(suggestion.orderLine.purchaseOrder))}
-          ${renderSuggestionField('Artikkelkode', suggestionValue(suggestion.orderLine.articleCode))}
-          ${renderSuggestionField('Artikkelnavn', suggestionValue(suggestion.orderLine.articleName))}
-          ${renderSuggestionField('Leverandør', suggestionValue(suggestion.orderLine.supplierName))}
-          ${renderSuggestionField('Bestilt antall', suggestionValue(suggestion.orderLine.quantity))}
-          ${renderSuggestionField('Enhetspris', formatAmount(suggestion.orderLine.unitPrice))}
-          ${renderSuggestionField('Beløp', formatAmount(suggestion.orderLine.amount))}
-          ${renderSuggestionField('Koblet antall', suggestionValue(suggestion.orderLine.connectedQuantity))}
-          ${renderSuggestionField('Mottatt, ikke koblet', suggestionValue(suggestion.orderLine.receivedNotConnectedQuantity))}
-        </dl>
-      </div>`
+  const badge = SUGGESTION_BADGE[suggestion.strength];
+  const mediusLinkHtml = suggestion.mediusLink
+    ? `<a class="bf-button bf-button-small" href="${escapeHtml(suggestion.mediusLink)}" target="_blank" rel="noopener noreferrer">
+        Åpne i Medius <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+      </a>`
     : '';
 
-  const supplierOrderLineGroup = `<div class="suggestion-group">
-      <h3>Leverandørordre (supplier_order_line)</h3>
-      <dl>
-        ${renderSuggestionField('Ordrenummer', suggestionValue(suggestion.orderId))}
-        ${renderSuggestionField('Artikkelnummer', suggestionValue(suggestion.articleNumber))}
-        ${renderSuggestionField('Reference ID', suggestionValue(suggestion.referenceId))}
-        ${renderSuggestionField('Visma-ordre (ekstrahert)', suggestionValue(suggestion.poNumber))}
-      </dl>
-    </div>`;
+  const articleCls = suggestion.articleMatches ? 'compare-match' : 'compare-mismatch';
+  const supplierCls = suggestion.supplierMatches ? 'compare-match' : 'compare-mismatch';
 
-  const invoiceLineGroup = `<div class="suggestion-group">
-      <h3>Fakturalinje (medius_invoice_lines)</h3>
-      <dl>
-        ${renderSuggestionField('Fakturanummer', suggestionValue(suggestion.invoiceLine.invoiceNumber))}
-        ${renderSuggestionField('Visma-ordre', suggestionValue(suggestion.invoiceLine.vismaPurchaseOrder))}
-        ${renderSuggestionField('Artikkelkode', suggestionValue(suggestion.invoiceLine.articleCode))}
-        ${renderSuggestionField('Artikkelnavn', suggestionValue(suggestion.invoiceLine.articleName))}
-        ${renderSuggestionField('Fakturert antall', suggestionValue(suggestion.invoiceLine.quantity))}
-        ${renderSuggestionField('Enhetspris', formatAmount(suggestion.invoiceLine.unitPrice))}
-        ${renderSuggestionField('Beløp', formatAmount(suggestion.invoiceLine.amount))}
-        ${renderSuggestionField('Koblingsstatus', suggestionValue(suggestion.invoiceLine.connectionStatus))}
-        ${renderSuggestionField('Ikke koblet antall', suggestionValue(suggestion.invoiceLine.quantityNotConnected))}
-        ${renderSuggestionField('Ikke koblet beløp', formatAmount(suggestion.invoiceLine.amountNotConnected))}
-      </dl>
-    </div>`;
+  const compareRowsHtml = [
+    renderCompareRow('Antall', suggestion.orderQuantity, suggestion.invoiceQuantity, suggestion.quantityMatches),
+    renderCompareRow('Enhetspris', formatAmount(suggestion.orderUnitPrice), formatAmount(suggestion.invoiceUnitPrice), suggestion.unitPriceMatches),
+    renderCompareRow('Beløp', formatAmount(suggestion.orderAmount), formatAmount(suggestion.invoiceAmount), suggestion.amountMatches),
+    // No reference_id to compare against for a manual order - this row is
+    // simply not applicable there (see invoiceSuggestions.js). Whenever it
+    // does apply, it's always a mismatch by construction: a matching Visma
+    // order means the invoice is already connected and gets excluded before
+    // it ever reaches this page (see buildInvoiceSuggestionsForAvvik).
+    suggestion.referenceVismaOrder
+      ? `<div class="compare-row compare-mismatch">
+          <span class="compare-label">Visma-ordre</span>
+          <span class="compare-value">Fra ordre: ${suggestionValue(suggestion.referenceVismaOrder)}</span>
+          <span class="compare-value">Fra faktura: ${suggestionValue(suggestion.invoiceVismaOrder)}</span>
+          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        </div>`
+      : '',
+  ].join('');
 
-  const reasonsHtml = suggestion.reasons
-    .map(
-      (r) =>
-        `<li class="${r.ok ? 'reason-ok' : 'reason-warn'}"><i class="fa-solid ${r.ok ? 'fa-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i> ${escapeHtml(r.text)}</li>`
-    )
-    .join('');
+  // Each part is already escaped (suggestionValue/formatAmount return
+  // pre-escaped/plain-numeric strings) - the joined line must not be
+  // escaped again, or entities like "&amp;" would double-escape.
+  const metaParts = [`Koblingsstatus: ${suggestionValue(suggestion.connectionStatus)}`];
+  if (suggestion.quantityNotConnected) metaParts.push(`Ikke koblet antall: ${suggestionValue(suggestion.quantityNotConnected)}`);
+  if (suggestion.amountNotConnected) metaParts.push(`Ikke koblet beløp: ${formatAmount(suggestion.amountNotConnected)}`);
 
   return `
-    <div class="bf-card invoice-suggestion-card tone-border-${tone}"><div class="bf-card-content">
-      <span class="bf-badge bfc-${tone}-bg">${escapeHtml(badgeLabel)}</span>
-      <div class="suggestion-groups">
-        ${orderLineGroup}
-        ${supplierOrderLineGroup}
-        ${invoiceLineGroup}
+    <div class="bf-card invoice-suggestion-card tone-border-${badge.tone}"><div class="bf-card-content">
+      <div class="suggestion-header">
+        <span class="bf-badge bfc-${badge.tone}-bg"><i class="fa-solid ${badge.icon}" aria-hidden="true"></i> ${escapeHtml(badge.label)}</span>
+        <span class="suggestion-invoice-number">Faktura: ${suggestionValue(suggestion.invoiceNumber)}</span>
+        ${mediusLinkHtml}
       </div>
-      <div class="suggestion-reasons">
-        <strong>Begrunnelse for forslaget:</strong>
-        <ul>${reasonsHtml}</ul>
+      <div class="suggestion-subheader ${articleCls}">
+        <i class="fa-solid ${suggestion.articleMatches ? 'fa-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i>
+        ${suggestionValue(suggestion.articleCode)}${suggestion.articleName ? ` – ${suggestionValue(suggestion.articleName)}` : ''}
       </div>
+      <div class="suggestion-subheader ${supplierCls}">
+        <i class="fa-solid ${suggestion.supplierMatches ? 'fa-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i>
+        Leverandør: ${suggestionValue(suggestion.supplierName)}
+      </div>
+      <div class="suggestion-compare">${compareRowsHtml}</div>
+      <div class="suggestion-meta">${metaParts.join(' · ')}</div>
+      <p class="suggestion-reason">${escapeHtml(suggestion.reason)}</p>
     </div></div>`;
 }
 

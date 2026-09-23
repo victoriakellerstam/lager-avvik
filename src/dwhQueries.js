@@ -1103,6 +1103,29 @@ async function fetchUnconnectedInvoiceLines() {
   });
 }
 
+// One direct Medius link per invoice_number, for the "Åpne i Medius" button
+// on an invoice suggestion (see invoiceSuggestions.js) - keyed purely by
+// invoice_number, unlike fetchMediusLinks/fetchMediusCostInvoiceLinks
+// elsewhere in this file, which key by PO/supplier because they're matching
+// an avvik's own order, not looking up an already-known invoice number.
+// medius_invoice_head can have more than one row per invoice_number (e.g. an
+// Archived one and an Invalidated one) - avvikSync.js dedupes with the
+// existing pickBestMediusInvoice (Archived wins, same as everywhere else).
+async function fetchMediusInvoiceHeadByNumber() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT
+        invoice_number,
+        medius_link,
+        processing_status,
+        document_id
+      FROM [dwh].[finance].[medius_invoice_head]
+      WHERE medius_link IS NOT NULL
+    `);
+    return result.recordset;
+  });
+}
+
 module.exports = {
   fetchAvvikRows,
   fetchIntilityUsers,
@@ -1113,4 +1136,5 @@ module.exports = {
   fetchOrderDeviations,
   fetchMediusOrderLines,
   fetchUnconnectedInvoiceLines,
+  fetchMediusInvoiceHeadByNumber,
 };

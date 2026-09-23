@@ -7,8 +7,7 @@ const { normalizeFullNameForMatching, resolvePurchaserEmail } = require('./purch
 const {
   buildOrderLineKey,
   buildInvoiceLineCandidateKey,
-  buildInvoiceSuggestion,
-  rankInvoiceSuggestions,
+  buildInvoiceSuggestionsForAvvik,
 } = require('./invoiceSuggestions');
 
 function toIso(value) {
@@ -168,6 +167,7 @@ async function syncAvvikFromDwh() {
   const orderDeviations = await dwhQueries.fetchOrderDeviations();
   const mediusOrderLines = await dwhQueries.fetchMediusOrderLines();
   const unconnectedInvoiceLines = await dwhQueries.fetchUnconnectedInvoiceLines();
+  const mediusInvoiceHeadRows = await dwhQueries.fetchMediusInvoiceHeadByNumber();
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
@@ -239,6 +239,22 @@ async function syncAvvikFromDwh() {
     if (!invoiceLineCandidatesByKey.has(key)) invoiceLineCandidatesByKey.set(key, []);
     invoiceLineCandidatesByKey.get(key).push(line);
   }
+  // Keyed purely by invoice_number (see dwhQueries.js's
+  // fetchMediusInvoiceHeadByNumber) for the "Åpne i Medius" link on a
+  // suggestion - reuses pickBestMediusInvoice for the same Archived-over-
+  // Invalidated dedup already used everywhere else in this file.
+  const invoiceHeadCandidatesByNumber = new Map();
+  for (const h of mediusInvoiceHeadRows) {
+    const key = String(h.invoice_number ?? '').trim().toLowerCase();
+    if (!invoiceHeadCandidatesByNumber.has(key)) invoiceHeadCandidatesByNumber.set(key, []);
+    invoiceHeadCandidatesByNumber.get(key).push(h);
+  }
+  const mediusLinkByInvoiceNumber = new Map(
+    [...invoiceHeadCandidatesByNumber.entries()].map(([key, candidates]) => [
+      key,
+      pickBestMediusInvoice(candidates).medius_link,
+    ])
+  );
 
   const avvikRows = [];
   for (const row of rows) {
@@ -269,18 +285,12 @@ async function syncAvvikFromDwh() {
     const invoiceCandidates = orderLine
       ? invoiceLineCandidatesByKey.get(buildInvoiceLineCandidateKey(row.article_number, row.supplier_id_text)) || []
       : [];
-    const invoiceSuggestions = rankInvoiceSuggestions(
-      invoiceCandidates.map((invoiceLine) =>
-        buildInvoiceSuggestion({
-          orderLine,
-          orderId: row.supplier_order_number,
-          articleNumber: row.article_number,
-          poNumber: row.po_number,
-          referenceId: row.reference_id,
-          invoiceLine,
-        })
-      )
-    );
+    const invoiceSuggestions = buildInvoiceSuggestionsForAvvik({
+      orderLine,
+      poNumber: row.po_number,
+      candidates: invoiceCandidates,
+      mediusLinkByInvoiceNumber,
+    });
 
     avvikRows.push({
       id: buildSyntheticId(row),
