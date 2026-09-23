@@ -4,6 +4,12 @@ const crypto = require('crypto');
 const dwhQueries = require('./dwhQueries');
 const { mapDeviationScenario } = require('./scenario');
 const { normalizeFullNameForMatching, resolvePurchaserEmail } = require('./purchaser');
+const {
+  buildOrderLineKey,
+  buildInvoiceLineCandidateKey,
+  buildInvoiceSuggestion,
+  rankInvoiceSuggestions,
+} = require('./invoiceSuggestions');
 
 function toIso(value) {
   return value instanceof Date ? value.toISOString() : value;
@@ -160,6 +166,8 @@ async function syncAvvikFromDwh() {
   const mediusCostInvoiceLinks = await dwhQueries.fetchMediusCostInvoiceLinks();
   const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot();
   const orderDeviations = await dwhQueries.fetchOrderDeviations();
+  const mediusOrderLines = await dwhQueries.fetchMediusOrderLines();
+  const unconnectedInvoiceLines = await dwhQueries.fetchUnconnectedInvoiceLines();
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
@@ -213,6 +221,24 @@ async function syncAvvikFromDwh() {
     if (!deviationNamesByOrderArticle.has(key)) deviationNamesByOrderArticle.set(key, new Set());
     deviationNamesByOrderArticle.get(key).add(d.deviation_name);
   }
+  // First match wins per key - medius_order_lines isn't guaranteed unique per
+  // purchase_order+article_code, but this is only the display-only
+  // "ordrelinje" card (see invoiceSuggestions.js), not a matching criterion,
+  // so a deterministic pick is enough.
+  const mediusOrderLineByKey = new Map();
+  for (const line of mediusOrderLines) {
+    const key = buildOrderLineKey(line.purchase_order, line.article_code);
+    if (!mediusOrderLineByKey.has(key)) mediusOrderLineByKey.set(key, line);
+  }
+  // Grouped the same way mediusCandidatesByKey is above - every unconnected
+  // invoice line sharing an avvik's article+supplier is a candidate for that
+  // avvik's "Forslag til faktura" section (see invoiceSuggestions.js).
+  const invoiceLineCandidatesByKey = new Map();
+  for (const line of unconnectedInvoiceLines) {
+    const key = buildInvoiceLineCandidateKey(line.article_code, line.supplier_id);
+    if (!invoiceLineCandidatesByKey.has(key)) invoiceLineCandidatesByKey.set(key, []);
+    invoiceLineCandidatesByKey.get(key).push(line);
+  }
 
   const avvikRows = [];
   for (const row of rows) {
@@ -235,6 +261,26 @@ async function syncAvvikFromDwh() {
       mediusInfoByKey.get(buildMediusLinkKey(row.po_number, row.article_number, row.supplier_id_text)) ||
       mediusCostInfoByKey.get(buildMediusCostLinkKey(row.po_number, row.supplier_id_text));
     const stockBreakdown = resolveStockBreakdown(row.lot_number, stockBreakdownByLot);
+
+    // "Forslag til faktura som må kobles til ordrelinjen": only meaningful
+    // once we know what was actually ordered (mediusOrderLineByKey) - with no
+    // such row there's nothing to build a suggestion card set around at all.
+    const orderLine = mediusOrderLineByKey.get(buildOrderLineKey(row.supplier_order_number, row.article_number)) || null;
+    const invoiceCandidates = orderLine
+      ? invoiceLineCandidatesByKey.get(buildInvoiceLineCandidateKey(row.article_number, row.supplier_id_text)) || []
+      : [];
+    const invoiceSuggestions = rankInvoiceSuggestions(
+      invoiceCandidates.map((invoiceLine) =>
+        buildInvoiceSuggestion({
+          orderLine,
+          orderId: row.supplier_order_number,
+          articleNumber: row.article_number,
+          poNumber: row.po_number,
+          referenceId: row.reference_id,
+          invoiceLine,
+        })
+      )
+    );
 
     avvikRows.push({
       id: buildSyntheticId(row),
@@ -259,6 +305,7 @@ async function syncAvvikFromDwh() {
       invoiceDeviations: [
         ...(deviationNamesByOrderArticle.get(buildOrderDeviationKey(row.supplier_order_number, row.article_number)) || []),
       ],
+      invoiceSuggestions,
     });
   }
 

@@ -868,6 +868,29 @@ const SHARED_STYLE = `
     .procedure-section h2 { font-size: var(--bf-font-size-h3); }
     .procedure-card .bf-card-content { padding: var(--bfs16); }
     .procedure-steps { font-size: var(--bf-font-size-m); }
+  }
+  /* One card per candidate invoice (see renderOneInvoiceSuggestion) - the
+     border carries strength the same way tone-border-<tone> already does for
+     the info cards/procedure-card (success = sterkt forslag, warning =
+     svakt). Three source-table sub-groups sit side by side on wide screens
+     and stack on narrow ones, same content-sized-grow approach as
+     .info-cards above. */
+  .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); }
+  .invoice-suggestion-card { border-width: 2px; border-style: solid; }
+  .suggestion-groups { display: flex; flex-wrap: wrap; gap: var(--bfs24); margin-top: var(--bfs16); }
+  .suggestion-group { flex: 1 1 14rem; min-width: 14rem; }
+  .suggestion-group h3 { font-size: var(--bf-font-size-m); margin: 0 0 var(--bfs8); }
+  .suggestion-group dl { margin: 0; display: flex; flex-direction: column; gap: var(--bfs4); font-size: var(--bf-font-size-s); }
+  .suggestion-group dl > div { display: flex; justify-content: space-between; gap: var(--bfs12); border-bottom: var(--bf-border); padding-bottom: var(--bfs2); }
+  .suggestion-group dt { color: var(--bfc-base-c-dimmed); }
+  .suggestion-group dd { margin: 0; text-align: right; font-weight: 600; }
+  .suggestion-reasons { margin-top: var(--bfs24); font-size: var(--bf-font-size-s); }
+  .suggestion-reasons ul { list-style: none; margin: var(--bfs8) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
+  .suggestion-reasons li { display: flex; align-items: flex-start; gap: var(--bfs8); }
+  .reason-ok i { color: var(--bfc-success); }
+  .reason-warn i { color: var(--bfc-warning); }
+  @media (max-width: 480px) {
+    .suggestion-group { flex: 1 1 100%; }
   }`;
 
 // Runs before the stylesheet/body so a stored preference applies with no
@@ -1124,6 +1147,112 @@ function renderProcedureSteps(procedure) {
   return `<ul class="procedure-steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`;
 }
 
+// "—" for a missing suggestion field, consistent with hasValue/renderInfoCard
+// above, but simpler since a suggestion card always shows every field (no
+// hide-the-whole-card behavior at the field level, unlike the info cards).
+function suggestionValue(value) {
+  return value === null || value === undefined || value === '' ? '—' : escapeHtml(String(value));
+}
+
+// Norwegian-style "571,01" rather than "571.01" - amounts/prices aren't shown
+// anywhere else in this app yet, hence a small local helper rather than
+// reusing something that already existed.
+function formatAmount(value) {
+  if (value === null || value === undefined) return '—';
+  return Number(value).toFixed(2).replace('.', ',');
+}
+
+function renderSuggestionField(label, value) {
+  return `<div><dt>${label}</dt><dd>${value}</dd></div>`;
+}
+
+// The three source-table cards inside one suggestion (see
+// invoiceSuggestions.js's buildInvoiceSuggestion for where every field here
+// comes from). orderLine is the only part that can be missing entirely (see
+// avvikSync.js) - the card is then omitted rather than shown full of dashes.
+function renderOneInvoiceSuggestion(suggestion) {
+  const tone = suggestion.strength === 'strong' ? 'success' : 'warning';
+  const badgeLabel = suggestion.strength === 'strong' ? 'Sterkt forslag' : 'Svakt forslag – krever manuell sjekk';
+
+  const orderLineGroup = suggestion.orderLine
+    ? `<div class="suggestion-group">
+        <h3>Ordrelinje (medius_order_lines)</h3>
+        <dl>
+          ${renderSuggestionField('Ordrenummer (PO)', suggestionValue(suggestion.orderLine.purchaseOrder))}
+          ${renderSuggestionField('Artikkelkode', suggestionValue(suggestion.orderLine.articleCode))}
+          ${renderSuggestionField('Artikkelnavn', suggestionValue(suggestion.orderLine.articleName))}
+          ${renderSuggestionField('Leverandør', suggestionValue(suggestion.orderLine.supplierName))}
+          ${renderSuggestionField('Bestilt antall', suggestionValue(suggestion.orderLine.quantity))}
+          ${renderSuggestionField('Enhetspris', formatAmount(suggestion.orderLine.unitPrice))}
+          ${renderSuggestionField('Beløp', formatAmount(suggestion.orderLine.amount))}
+          ${renderSuggestionField('Koblet antall', suggestionValue(suggestion.orderLine.connectedQuantity))}
+          ${renderSuggestionField('Mottatt, ikke koblet', suggestionValue(suggestion.orderLine.receivedNotConnectedQuantity))}
+        </dl>
+      </div>`
+    : '';
+
+  const supplierOrderLineGroup = `<div class="suggestion-group">
+      <h3>Leverandørordre (supplier_order_line)</h3>
+      <dl>
+        ${renderSuggestionField('Ordrenummer', suggestionValue(suggestion.orderId))}
+        ${renderSuggestionField('Artikkelnummer', suggestionValue(suggestion.articleNumber))}
+        ${renderSuggestionField('Reference ID', suggestionValue(suggestion.referenceId))}
+        ${renderSuggestionField('Visma-ordre (ekstrahert)', suggestionValue(suggestion.poNumber))}
+      </dl>
+    </div>`;
+
+  const invoiceLineGroup = `<div class="suggestion-group">
+      <h3>Fakturalinje (medius_invoice_lines)</h3>
+      <dl>
+        ${renderSuggestionField('Fakturanummer', suggestionValue(suggestion.invoiceLine.invoiceNumber))}
+        ${renderSuggestionField('Visma-ordre', suggestionValue(suggestion.invoiceLine.vismaPurchaseOrder))}
+        ${renderSuggestionField('Artikkelkode', suggestionValue(suggestion.invoiceLine.articleCode))}
+        ${renderSuggestionField('Artikkelnavn', suggestionValue(suggestion.invoiceLine.articleName))}
+        ${renderSuggestionField('Fakturert antall', suggestionValue(suggestion.invoiceLine.quantity))}
+        ${renderSuggestionField('Enhetspris', formatAmount(suggestion.invoiceLine.unitPrice))}
+        ${renderSuggestionField('Beløp', formatAmount(suggestion.invoiceLine.amount))}
+        ${renderSuggestionField('Koblingsstatus', suggestionValue(suggestion.invoiceLine.connectionStatus))}
+        ${renderSuggestionField('Ikke koblet antall', suggestionValue(suggestion.invoiceLine.quantityNotConnected))}
+        ${renderSuggestionField('Ikke koblet beløp', formatAmount(suggestion.invoiceLine.amountNotConnected))}
+      </dl>
+    </div>`;
+
+  const reasonsHtml = suggestion.reasons
+    .map(
+      (r) =>
+        `<li class="${r.ok ? 'reason-ok' : 'reason-warn'}"><i class="fa-solid ${r.ok ? 'fa-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i> ${escapeHtml(r.text)}</li>`
+    )
+    .join('');
+
+  return `
+    <div class="bf-card invoice-suggestion-card tone-border-${tone}"><div class="bf-card-content">
+      <span class="bf-badge bfc-${tone}-bg">${escapeHtml(badgeLabel)}</span>
+      <div class="suggestion-groups">
+        ${orderLineGroup}
+        ${supplierOrderLineGroup}
+        ${invoiceLineGroup}
+      </div>
+      <div class="suggestion-reasons">
+        <strong>Begrunnelse for forslaget:</strong>
+        <ul>${reasonsHtml}</ul>
+      </div>
+    </div></div>`;
+}
+
+// Hidden entirely when there's nothing to suggest - an empty array means no
+// unconnected invoice-line candidate matched this avvik's order line at all
+// (see avvikSync.js/invoiceSuggestions.js), per the task's "skjul seksjonen
+// helt" rather than an empty section.
+function renderInvoiceSuggestions(avvik) {
+  const suggestions = avvik.invoiceSuggestions || [];
+  if (!suggestions.length) return '';
+  return `
+    <section class="detail-page-section invoice-suggestions-section">
+      <h2>Forslag til faktura som må kobles til ordrelinjen</h2>
+      <div class="invoice-suggestions">${suggestions.map(renderOneInvoiceSuggestion).join('')}</div>
+    </section>`;
+}
+
 // Detail page for a single avvik/ordrelinje, reached by clicking its row (or
 // its old "Dette må gjøres"/"Mer informasjon" action) anywhere it appears -
 // open avvik, Finance, or Arkiv. Info cards, the header icon links, and
@@ -1209,7 +1338,9 @@ function renderAvvikDetailPage(avvik) {
       <div class="bf-card procedure-card tone-border-${avvikTone}"><div class="bf-card-content">
         ${procedureBodyHtml}
       </div></div>
-    </section>` : ''}`;
+    </section>` : ''}
+
+    ${renderInvoiceSuggestions(avvik)}`;
 
   const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} – Avvik – ${avvik.orderId}`;
   // "Mer informasjon" (Finance-section cases) should light up "Saker som

@@ -717,6 +717,7 @@ async function fetchAvvikRows() {
                 sol.days_waiting,
                 sol.department_number,
                 sol.po_number,
+                sol.reference_id,
                 pt.ticket_url,
                 sol.supplier_id_text,
 
@@ -856,6 +857,7 @@ async function fetchAvvikRows() {
             days_waiting,
             department_number,
             po_number,
+            reference_id,
             supplier_id_text,
             ticket_url,
             case_owner,
@@ -1038,6 +1040,69 @@ async function fetchOrderDeviations() {
   });
 }
 
+// Medius PO order lines, for the "Forslag til faktura som må kobles til
+// ordrelinjen" suggestion feature (see src/invoiceSuggestions.js): the
+// display-only "ordrelinje" card showing what was actually ordered/received/
+// connected so far. purchase_order + article_code is the join key back to an
+// avvik row's own supplier_order_number + article_number (see avvikSync.js).
+async function fetchMediusOrderLines() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT
+        purchase_order,
+        article_code,
+        article_name,
+        supplier_id,
+        supplier_name,
+        quantity,
+        unit_price,
+        amount,
+        connected_quantity,
+        connected_amount,
+        received_quantity,
+        received_amount,
+        received_not_connected_quantity,
+        received_not_connected_amount
+      FROM [dwh].[finance].[medius_order_lines]
+    `);
+    return result.recordset;
+  });
+}
+
+// Candidate invoice lines for the same suggestion feature: only lines not
+// yet connected to any order line (connection_status = 'Empty', or some
+// quantity on the line still unconnected) are worth suggesting at all - a
+// fully-connected line is already matched to its real order elsewhere.
+// article_code + supplier_id is the loose match key against an avvik's own
+// article_number + supplier number (see invoiceSuggestions.js); whether
+// visma_purchase_order also matches the order line's reference_id decides
+// strong vs. weak suggestion strength there.
+async function fetchUnconnectedInvoiceLines() {
+  return withPool(async (pool) => {
+    const result = await pool.request().query(`
+      SELECT
+        invoice_number,
+        visma_purchase_order,
+        article_code,
+        article_name,
+        supplier_id,
+        supplier_name,
+        quantity,
+        unit_price,
+        amount,
+        document_id,
+        connection_status,
+        line_number,
+        quantity_not_connected_to_purchase_order_line,
+        amount_not_connected_to_purchase_order_line
+      FROM [dwh].[finance].[medius_invoice_lines]
+      WHERE connection_status = 'Empty'
+         OR quantity_not_connected_to_purchase_order_line > 0
+    `);
+    return result.recordset;
+  });
+}
+
 module.exports = {
   fetchAvvikRows,
   fetchIntilityUsers,
@@ -1046,4 +1111,6 @@ module.exports = {
   fetchMediusCostInvoiceLinks,
   fetchStockMovementBreakdownByLot,
   fetchOrderDeviations,
+  fetchMediusOrderLines,
+  fetchUnconnectedInvoiceLines,
 };
