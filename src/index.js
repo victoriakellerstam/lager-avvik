@@ -241,6 +241,11 @@ function createServer() {
 }
 
 if (require.main === module) {
+  // Restore comments/resolved/archived avvik from data/state.json before the
+  // dwh sync below merges into the list, so the previous run's local state is
+  // already in place by then.
+  store.initPersistence();
+
   const server = createServer();
   server.listen(PORT, () => {
     console.log(`lager-avvik listening on port ${PORT}`);
@@ -254,7 +259,7 @@ if (require.main === module) {
     .then((freshAvvikRows) => {
       const result = store.mergeFromDwh(freshAvvikRows);
       console.log(
-        `dwh startup sync: ${result.updated} updated, ${result.inserted} inserted, ${result.markedMissing} marked missing`
+        `dwh startup sync: ${result.updated} updated, ${result.inserted} inserted, ${result.archived} archived, ${result.reopened} reopened`
       );
     })
     .catch((err) => {

@@ -322,7 +322,15 @@ function splitAvvik(avvikList) {
   const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
   const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
   const open = rest.filter((a) => !a.resolved).sort(byDaysWaitingDesc);
-  const resolved = rest.filter((a) => a.resolved);
+  // Most recently resolved first, so the archive reads as a running history
+  // (the "Løst" date column) rather than an arbitrary order. Ordered by
+  // resolvedAt, not daysWaiting: an archived row's daysWaiting is frozen at
+  // whatever it was when dwh last returned the line, since dwh no longer
+  // returns it - the date it was closed is the meaningful ordering here.
+  // Falls back to daysWaiting for any row without a resolvedAt.
+  const resolved = rest
+    .filter((a) => a.resolved)
+    .sort((a, b) => String(b.resolvedAt || '').localeCompare(String(a.resolvedAt || '')) || byDaysWaitingDesc(a, b));
   return { financeCases, vismaStatusChangeCases, noOwnerCases, open, resolved };
 }
 
@@ -1324,6 +1332,7 @@ function renderAvvikDetailPage(avvik) {
     renderInfoCard('Innkjøpsordrenummer', avvik.orderId, avvikTone),
     renderInfoCard('SKU', avvik.articleNumber, avvikTone),
     renderInfoCard('Leverandør', avvik.supplierName, avvikTone),
+    renderInfoCard('Prosjekt', avvik.projectNumber, avvikTone),
     renderInfoCard('Bestillingsdato', avvik.createdAt ? new Date(avvik.createdAt).toLocaleDateString('no-NO') : null, avvikTone),
     renderInfoCard('Type avvik', avvik.discrepancyType, avvikTone),
     renderInfoCard('Dager ventende', typeof avvik.daysWaiting === 'number' ? avvik.daysWaiting : null, avvikTone),

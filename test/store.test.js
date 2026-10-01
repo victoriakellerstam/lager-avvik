@@ -63,93 +63,82 @@ test('mergeFromDwh: an id not seen before is inserted with fresh local-state def
   assert.deepEqual(inserted.comments, []);
 });
 
-test('mergeFromDwh: an open avvik missing from a fresh fetch is kept (not deleted) and flagged missing, but not yet resolved', () => {
+test('mergeFromDwh: an open avvik missing from a fresh fetch is archived, not deleted', () => {
   const [existing] = store.listAvvik();
   const before = store.listAvvik().length;
-  const unresolvedCountBefore = store.listAvvik().filter((a) => !a.resolved).length;
+  const openCountBefore = store.listAvvik().filter((a) => !a.resolved).length;
 
   const result = store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
 
   assert.equal(store.listAvvik().length, before, 'nothing should ever be deleted');
   const after = store.getAvvik(existing.id);
-  assert.equal(after.missingFromLastSyncAt, '2026-08-20T00:00:00.000Z');
-  // A single sync where it's missing isn't enough on its own - order_status
-  // can blip for reasons unrelated to actually being fixed, so it must stay
-  // missing for the full three weeks (see the next test) before this app
-  // trusts the disappearance.
-  assert.equal(after.resolved, false);
-  assert.equal(after.resolvedAt, null);
-  // Only the already-unresolved seed avvik get flagged - the seeded resolved
-  // one (see mockData.js) must not be touched at all.
-  assert.equal(result.markedMissing, unresolvedCountBefore);
+  // Leaving dwh's result set means the order line stopped being 3030, which is
+  // how a case normally closes (the line got matched against its invoice), so
+  // it goes straight to the archive - no waiting period.
+  assert.equal(after.resolved, true);
+  assert.equal(after.resolvedAt, '2026-08-20T00:00:00.000Z');
+  assert.equal(after.resolvedSource, 'auto');
+  // Only the still-open seed avvik get archived - the seeded resolved one
+  // (see mockData.js) must not be counted again.
+  assert.equal(result.archived, openCountBefore);
 });
 
-test('mergeFromDwh: missingFromLastSyncAt records the FIRST sync it went missing, not the latest, and does not resolve before three weeks pass', () => {
-  const [existing] = store.listAvvik();
-
-  store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
-  store.mergeFromDwh([], new Date('2026-08-27T00:00:00.000Z')); // only 7 days later
-
-  const after = store.getAvvik(existing.id);
-  assert.equal(after.missingFromLastSyncAt, '2026-08-20T00:00:00.000Z');
-  assert.equal(after.resolved, false, 'less than three weeks missing - not resolved yet');
-});
-
-test('mergeFromDwh: auto-resolves once an avvik has stayed missing for at least three weeks (21 days)', () => {
+test('mergeFromDwh: resolvedAt records the FIRST sync the row went missing, not a later one', () => {
   const [existing] = store.listAvvik();
 
   store.mergeFromDwh([], new Date('2026-08-01T00:00:00.000Z'));
-  assert.equal(store.getAvvik(existing.id).resolved, false, 'not yet 21 days missing');
-
-  store.mergeFromDwh([], new Date('2026-08-22T00:00:00.000Z')); // exactly 21 days later
+  store.mergeFromDwh([], new Date('2026-08-22T00:00:00.000Z'));
 
   const after = store.getAvvik(existing.id);
-  assert.equal(after.resolved, true);
-  assert.equal(after.resolvedAt, '2026-08-22T00:00:00.000Z');
-  // missingFromLastSyncAt keeps reading "missing since" the first sync, not
-  // the sync that finally triggered auto-resolution.
   assert.equal(after.missingFromLastSyncAt, '2026-08-01T00:00:00.000Z');
+  assert.equal(after.resolvedAt, '2026-08-01T00:00:00.000Z', 'the archive date is when it was first seen gone');
 });
 
-test('mergeFromDwh: a previously-resolved avvik missing from a fresh fetch is left completely untouched', () => {
+test('mergeFromDwh: a manually-resolved avvik missing from a fresh fetch is left completely untouched', () => {
   const [existing] = store.listAvvik();
   store.resolveAvvik(existing.id);
   const before = { ...store.getAvvik(existing.id) };
+  const stillOpenBefore = store.listAvvik().filter((a) => !a.resolved).length;
 
-  store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
+  const result = store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
 
   const after = store.getAvvik(existing.id);
   assert.equal(after.resolved, before.resolved);
   assert.equal(after.resolvedAt, before.resolvedAt);
-  assert.equal(after.missingFromLastSyncAt, undefined, 'a resolved avvik should not get the missing-flag at all');
+  assert.equal(after.resolvedSource, 'manual', 'a person\'s decision is not re-attributed to dwh');
+  assert.equal(after.missingFromLastSyncAt, null, 'an already-resolved avvik should not get the missing-flag at all');
+  assert.equal(result.archived, stillOpenBefore, 'this one was not among the rows archived');
 });
 
-test('mergeFromDwh: an avvik that was flagged missing clears the flag if it reappears before three weeks are up, and is never resolved', () => {
-  const [existing] = store.listAvvik();
-  store.mergeFromDwh([], new Date('2026-08-20T00:00:00.000Z'));
-  assert.ok(store.getAvvik(existing.id).missingFromLastSyncAt);
-  assert.equal(store.getAvvik(existing.id).resolved, false);
-
-  store.mergeFromDwh([freshRow({ id: existing.id })], new Date('2026-08-27T00:00:00.000Z')); // only 7 days later
-
-  const after = store.getAvvik(existing.id);
-  assert.equal(after.missingFromLastSyncAt, null);
-  assert.equal(after.resolved, false, 'a status blip that reverses within three weeks must never auto-resolve');
-});
-
-test('mergeFromDwh: reappearing after auto-resolution clears the missing-flag but does not auto-reopen it', () => {
+test('mergeFromDwh: an auto-archived avvik that reappears from dwh reopens', () => {
   const [existing] = store.listAvvik();
   store.mergeFromDwh([], new Date('2026-08-01T00:00:00.000Z'));
-  store.mergeFromDwh([], new Date('2026-08-22T00:00:00.000Z')); // 21 days later - now auto-resolved
   assert.equal(store.getAvvik(existing.id).resolved, true);
+  assert.equal(store.getAvvik(existing.id).resolvedSource, 'auto');
 
-  store.mergeFromDwh([freshRow({ id: existing.id })], new Date('2026-08-29T00:00:00.000Z'));
+  const result = store.mergeFromDwh([freshRow({ id: existing.id })], new Date('2026-08-08T00:00:00.000Z'));
 
   const after = store.getAvvik(existing.id);
+  assert.equal(after.resolved, false, 'dwh says it is open again, so it must not sit in the archive');
+  assert.equal(after.resolvedSource, null);
+  assert.equal(after.resolvedAt, null);
   assert.equal(after.missingFromLastSyncAt, null);
-  // Reappearing clears the missing-flag but doesn't auto-reopen it - same as
-  // any other resolved avvik, a human uses "Gjenåpne" for that.
-  assert.equal(after.resolved, true);
+  assert.equal(result.reopened, 1);
+});
+
+test('mergeFromDwh: a manually-resolved avvik that reappears from dwh stays resolved', () => {
+  const [existing] = store.listAvvik();
+  store.resolveAvvik(existing.id);
+  const commentsBefore = store.getAvvik(existing.id).comments.length;
+  store.addComment(existing.id, 'Ole', 'Lukket fordi innkjøper svarte.');
+
+  const result = store.mergeFromDwh([freshRow({ id: existing.id })], new Date('2026-08-08T00:00:00.000Z'));
+
+  const after = store.getAvvik(existing.id);
+  assert.equal(after.resolved, true, 'a human resolving a case outranks dwh showing the line again');
+  assert.equal(after.resolvedSource, 'manual');
+  assert.equal(result.reopened, 0);
+  assert.equal(after.comments.length, commentsBefore + 1, 'comments survive the reopen attempt too');
 });
 
 test('mergeFromDwh: a manually-corrected purchaser survives a later refresh, everything else still updates', () => {

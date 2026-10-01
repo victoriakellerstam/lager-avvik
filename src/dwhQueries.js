@@ -1,7 +1,13 @@
 'use strict';
 
-const sql = require('mssql');
-const { getConfig } = require('./dwh');
+// sql is resolved lazily via dwh.js's getSql(), not a direct require('mssql')
+// here, so this always uses whichever driver dwh.js picked for the active
+// env (tedious via the Minato Link, or msnodesqlv8 for local Windows-
+// integrated auth) - the two drivers aren't interchangeable, and
+// getConfig()'s shape depends on it. It also must stay lazy (resolved inside
+// withPool, not at module load) since msnodesqlv8 is an optional/native
+// dependency not installed everywhere this module gets required (e.g. tests).
+const { getConfig, getSql } = require('./dwh');
 
 // Both cutoffs are parameterized from the same hardcoded dates in the
 // ground-truth query below ('20260101' in two places) - do not change either
@@ -17,13 +23,14 @@ async function withPool(run) {
   // EventEmitter: without an 'error' listener, an async connection error (e.g.
   // a network hiccup on the Link) throws unhandled and crashes the whole
   // process, not just this one request.
+  const sql = getSql();
   const pool = new sql.ConnectionPool(getConfig());
   pool.on('error', (err) => {
     console.warn(`dwh connection pool error: ${err.message}`);
   });
   await pool.connect();
   try {
-    return await run(pool);
+    return await run(pool, sql);
   } finally {
     await pool.close();
   }
@@ -44,7 +51,7 @@ async function withPool(run) {
 // Only the columns avvikSync.js actually consumes are projected in the final
 // SELECT; every join/CTE above it is preserved exactly as given.
 async function fetchAvvikRows() {
-  return withPool(async (pool) => {
+  return withPool(async (pool, sql) => {
     const result = await pool
       .request()
       .input('mainCutoff', sql.Date, MAIN_TABLE_CUTOFF_DATE)
@@ -718,6 +725,7 @@ async function fetchAvvikRows() {
                 sol.department_number,
                 sol.po_number,
                 sol.reference_id,
+                sol.project_number,
                 pt.ticket_url,
                 sol.supplier_id_text,
 
@@ -861,7 +869,8 @@ async function fetchAvvikRows() {
             supplier_id_text,
             ticket_url,
             case_owner,
-            deviation_scenario
+            deviation_scenario,
+            project_number
         FROM Combined
         ORDER BY
             days_waiting DESC,

@@ -309,6 +309,15 @@ async function syncAvvikFromDwh() {
       // orderLine already resolved above for invoice suggestions), not
       // supplier_order_line, per the task's own table mapping.
       supplierName: orderLine ? orderLine.supplier_name : null,
+      // Display-only key figure (shown as the "Prosjekt" card on the detail
+      // page). It's also what the classification above keys on to detect an
+      // Internbestilling (project_number = 14000, see dwhQueries.js's Combined
+      // CTE), but every other project number is carried through too so the
+      // warehouse team can see which project a case belongs to.
+      // project_number = 0 is what dwh stores for "no project" (verified
+      // against real 2026 data: never NULL, 0 on 10 rows), so it's normalized
+      // to null here to keep the card hidden rather than reading "Prosjekt: 0".
+      projectNumber: row.project_number === 0 ? null : row.project_number ?? null,
       discrepancyType,
       createdAt: toIso(row.order_date),
       daysWaiting: row.days_waiting,

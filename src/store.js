@@ -1,23 +1,20 @@
 'use strict';
 
 const { SEED_AVVIK } = require('./mockData');
+const persistence = require('./persistence');
 
-// In-memory only: this app has no persistent database wired up yet. State
-// resets on restart, and the real avvik feed comes from the dwh startup sync
-// in index.js (see avvikSync.js) - SEED_AVVIK is fixture data for tests only
-// (via _reset()), not loaded here, so production never mixes mock rows into
-// the real feed.
+// Local state (comments, resolved/archived avvik, notification log) is durable
+// via persistence.js, but everything else here is still in memory only: the
+// real avvik feed comes from the dwh sync in index.js (see avvikSync.js), and
+// SEED_AVVIK is fixture data for tests only (via _reset()), not loaded here, so
+// production never mixes mock rows into the real feed.
 let avvikList = [];
 let notifications = [];
 let nextNotificationId = 1;
 
-// Same >21-days/three-week threshold fetchAvvikRows itself requires before an
-// order line counts as an avvik at all (see dwhQueries.js) - reused in
-// mergeFromDwh below so a single sync where a row goes missing isn't trusted
-// as a genuine resolution on its own; it has to stay missing for this same
-// three weeks first.
-const MISSING_TO_RESOLVED_DAYS = 21;
-const MISSING_TO_RESOLVED_MS = MISSING_TO_RESOLVED_DAYS * 24 * 60 * 60 * 1000;
+// Off until initPersistence() runs, so tests (which call _reset()) never touch
+// the developer's real data/state.json.
+let persistenceEnabled = false;
 
 function listAvvik() {
   return avvikList;
@@ -27,11 +24,53 @@ function getAvvik(id) {
   return avvikList.find((a) => a.id === id) || null;
 }
 
-function resolveAvvik(id) {
+// Called once at startup, before the first dwh sync, so the comments/resolved
+// flags of the previous run are already in place by the time that sync merges
+// into the list. A missing or unusable file is not an error - it just means
+// there is no previous local state to restore (see persistence.loadState).
+function initPersistence() {
+  const loaded = persistence.loadState();
+  persistenceEnabled = true;
+  if (loaded) {
+    // Defensive normalization: a row written by an older build, or hand-edited
+    // state.json, may be missing fields this one reads unconditionally
+    // (addComment pushes onto `comments`, dashboard reads `resolved`).
+    avvikList = loaded.avvikList.map((a) => ({
+      ...a,
+      comments: Array.isArray(a.comments) ? a.comments : [],
+      resolved: Boolean(a.resolved),
+      resolvedAt: a.resolvedAt || null,
+      lastNotifiedAt: a.lastNotifiedAt || null,
+      purchaserManuallySet: Boolean(a.purchaserManuallySet),
+      missingFromLastSyncAt: a.missingFromLastSyncAt || null,
+      resolvedSource: a.resolvedSource || (a.resolved ? 'manual' : null),
+    }));
+    notifications = loaded.notifications;
+    nextNotificationId = notifications.reduce((max, n) => Math.max(max, n.id || 0), 0) + 1;
+    console.log(`restored local state from ${persistence.stateFilePath()}: ${avvikList.length} avvik, ${notifications.length} notifications`);
+  }
+}
+
+function persist() {
+  if (!persistenceEnabled) return;
+  persistence.saveState({ avvikList, notifications, nextNotificationId });
+}
+
+// Why each avvik counts as resolved, which decides what a later sync is allowed
+// to undo (see mergeFromDwh):
+//   'manual' - a person clicked "Marker løst". Their decision outranks dwh:
+//     if the order line is still 3030 on the next sync, it stays resolved.
+//   'auto'   - the order line simply stopped coming back from dwh (it stopped
+//     being 3030, so it no longer counts as an avvik at all). This one is
+//     reversible: if the line starts showing up again, it reopens.
+function resolveAvvik(id, source = 'manual') {
   const avvik = getAvvik(id);
   if (!avvik) return null;
   avvik.resolved = true;
-  avvik.resolvedAt = new Date().toISOString();
+  avvik.resolvedSource = source;
+  avvik.resolvedAt = avvik.resolvedAt || new Date().toISOString();
+  avvik.missingFromLastSyncAt = null;
+  persist();
   return avvik;
 }
 
@@ -40,7 +79,9 @@ function reopenAvvik(id) {
   const avvik = getAvvik(id);
   if (!avvik) return null;
   avvik.resolved = false;
+  avvik.resolvedSource = null;
   avvik.resolvedAt = null;
+  persist();
   return avvik;
 }
 
@@ -60,6 +101,7 @@ function setManualPurchaser(id, name, email, department) {
   avvik.purchaserEmail = email || null;
   avvik.purchaserManuallySet = true;
   if (department) avvik.department = department;
+  persist();
   return avvik;
 }
 
@@ -75,6 +117,7 @@ function recordNotification(avvik, preview, now) {
     simulated: true,
   };
   notifications.unshift(entry);
+  persist();
   return entry;
 }
 
@@ -94,42 +137,48 @@ function addComment(id, author, text) {
     createdAt: new Date().toISOString(),
   };
   avvik.comments.push(comment);
+  persist();
   return comment;
 }
 
 // Reconciles a fresh batch of dwh-derived avvik (see src/avvikSync.js) into
-// the existing in-memory list, keyed by each row's synthetic `id`. This is
-// the only place dwh data ever touches the store, and it deliberately never
-// deletes anything:
+// the existing list, keyed by each row's synthetic `id`. This is the only place
+// dwh data ever touches the store, and it deliberately never deletes anything:
 //   - id in both: overwrite the dwh-derived fields, but never touch
 //     `resolved`/`resolvedAt`/`lastNotifiedAt`/`comments` - those are owned
 //     entirely by the warehouse team, not dwh. Same for purchaserName/
 //     purchaserEmail once purchaserManuallySet is true (see
 //     setManualPurchaser) - a human's correction outranks dwh's answer.
 //   - id only in the fresh batch: inserted as a brand-new avvik.
-//   - id only in the existing list (missing from the fresh batch): the
-//     underlying order line no longer has order_status = 3030 - one of the
-//     filters fetchAvvikRows' source query applies (see dwhQueries.js) - but
-//     a single sync where it goes missing isn't trusted as a genuine
-//     resolution on its own, since a status can blip for reasons unrelated
-//     to actually being fixed. If it was still open, it's stamped with
-//     `missingFromLastSyncAt` on the *first* sync where it goes missing (so
-//     the field reads as "missing since", not "last checked and still
-//     missing"); only once it has stayed missing for MISSING_TO_RESOLVED_DAYS
-//     (the same three-week/21-day threshold fetchAvvikRows itself requires
-//     before an order line counts as an avvik at all) does this app trust
-//     the disappearance and auto-resolve it - same `resolved`/`resolvedAt` a
-//     manual "Marker løst" sets. If it was already resolved, it's left
-//     alone entirely - expected to age out over time. Reappearing before
-//     the three weeks are up clears `missingFromLastSyncAt` and it's never
-//     auto-resolved; reappearing after auto-resolution just clears the flag
-//     again without auto-reopening it - a human uses "Gjenåpne" for that,
-//     same as any other resolved avvik.
+//   - id only in the existing list: the order line is no longer in dwh's result
+//     set, i.e. it no longer has order_status = 3030 (one of the filters
+//     fetchAvvikRows' source query applies - see dwhQueries.js). That is the
+//     real-world flow the archive is built around: a line sits at 3030 ("mottat")
+//     until it gets matched against a supplier invoice line, at which point it
+//     leaves 3030 and stops being an avvik. So a row going missing is the
+//     normal, expected way a case closes, and it is archived right away rather
+//     than after a delay - `resolvedAt` is stamped from
+//     `missingFromLastSyncAt` (set on the *first* sync where it went missing, so
+//     it reads as "first seen gone", not "last checked and still gone"), which
+//     is the closest available answer to "when was this resolved" given dwh has
+//     no status-history table.
+//
+//     Reversibility is decided by `resolvedSource`:
+//     - 'auto' (archived this way) reopens if the line comes back. The user
+//       described the flow as one-directional (Standard -> 3030 -> matched ->
+//       leaves 3030), but a line reappearing means dwh disagrees that it's
+//       closed, and showing a genuinely-open avvik in the archive would be
+//       worse than reopening one.
+//     - 'manual' is left resolved regardless - a person said so.
+//   Note that a resolved row is never dropped from avvikList, so the archive
+//   keeps growing and its rows stay renderable: dwh no longer returns them, so
+//   their dwh-derived fields are only available from the persisted state.
 function mergeFromDwh(freshAvvikRows, now = new Date()) {
   const freshById = new Map(freshAvvikRows.map((a) => [a.id, a]));
   const nowIso = now.toISOString();
   let updated = 0;
-  let markedMissing = 0;
+  let archived = 0;
+  let reopened = 0;
 
   for (const existing of avvikList) {
     const fresh = freshById.get(existing.id);
@@ -149,6 +198,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.invoiceDeviations = fresh.invoiceDeviations;
       existing.invoiceSuggestions = fresh.invoiceSuggestions;
       existing.supplierName = fresh.supplierName;
+      existing.projectNumber = fresh.projectNumber;
       if (!existing.purchaserManuallySet) {
         existing.purchaserName = fresh.purchaserName;
         existing.purchaserEmail = fresh.purchaserEmail;
@@ -158,16 +208,22 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.createdAt = fresh.createdAt;
       existing.daysWaiting = fresh.daysWaiting;
       existing.missingFromLastSyncAt = null;
+      // A row that was auto-archived and is now back from dwh is open again -
+      // but only if the archive was dwh's doing, never a person's own decision.
+      if (existing.resolved && existing.resolvedSource === 'auto') {
+        existing.resolved = false;
+        existing.resolvedSource = null;
+        existing.resolvedAt = null;
+        reopened += 1;
+      }
       updated += 1;
       freshById.delete(existing.id); // consumed; anything left over is new
     } else if (!existing.resolved) {
-      if (!existing.missingFromLastSyncAt) {
-        existing.missingFromLastSyncAt = nowIso;
-      } else if (now.getTime() - new Date(existing.missingFromLastSyncAt).getTime() >= MISSING_TO_RESOLVED_MS) {
-        existing.resolved = true;
-        existing.resolvedAt = nowIso;
-      }
-      markedMissing += 1;
+      existing.missingFromLastSyncAt = existing.missingFromLastSyncAt || nowIso;
+      existing.resolved = true;
+      existing.resolvedSource = 'auto';
+      existing.resolvedAt = existing.missingFromLastSyncAt;
+      archived += 1;
     }
   }
 
@@ -177,6 +233,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       ...fresh,
       resolved: false,
       resolvedAt: null,
+      resolvedSource: null,
       lastNotifiedAt: null,
       comments: [],
       missingFromLastSyncAt: null,
@@ -185,19 +242,30 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
     inserted += 1;
   }
 
-  return { updated, inserted, markedMissing };
+  persist();
+  return { updated, inserted, archived, reopened };
 }
 
-// Test-only helper to reset state between test files.
+// Test-only helper to reset state between test files. Doesn't persist, so a
+// test run can never overwrite a developer's real state.json.
 function _reset() {
   avvikList = SEED_AVVIK.map((a) => ({ ...a, comments: (a.comments || []).map((c) => ({ ...c })) }));
   notifications = [];
   nextNotificationId = 1;
+  persistenceEnabled = false;
+}
+
+// Test-only: point the store at a throwaway state file and turn persistence on,
+// so a test can cover the real load/save round trip.
+function _enablePersistenceAt(filePath) {
+  process.env.LAGER_AVVIK_STATE_FILE = filePath;
+  persistenceEnabled = true;
 }
 
 module.exports = {
   listAvvik,
   getAvvik,
+  initPersistence,
   resolveAvvik,
   reopenAvvik,
   setManualPurchaser,
@@ -206,4 +274,5 @@ module.exports = {
   addComment,
   mergeFromDwh,
   _reset,
+  _enablePersistenceAt,
 };
