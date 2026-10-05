@@ -17,6 +17,10 @@ const ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR = 'Ordre opprettet med feilaktig
 const SPESIELLE_CASER_FINANCE = 'Spesielle caser - Finance';
 const VAREFAKTURA_UNDER_BEHANDLING = 'Varefaktura — under behandling';
 
+// Not part of the catalog above: what a closed avvik is labelled when nothing
+// could tell its type apart (see avvikSync.js's classifyResolvedType).
+const UNKNOWN_HISTORY_TYPE = 'Ukjent (løst før appen fulgte saken)';
+
 const ALL_DISCREPANCY_TYPES = [
   IKKE_MOTTATT_FAKTURA_I_MEDIUS,
   INTERNBESTILLING,
@@ -39,5 +43,6 @@ module.exports = {
   ORDRE_OPPRETTET_MED_FEILAKTIG_DISTRIBUTOR,
   SPESIELLE_CASER_FINANCE,
   VAREFAKTURA_UNDER_BEHANDLING,
+  UNKNOWN_HISTORY_TYPE,
   ALL_DISCREPANCY_TYPES,
 };

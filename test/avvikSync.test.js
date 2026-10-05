@@ -212,3 +212,27 @@ test('buildMediusCostLinkKey: different suppliers for the same PO never collide 
   const keyB = buildMediusCostLinkKey('PO-1', 'SUPPLIER-B');
   assert.notEqual(keyA, keyB);
 });
+
+// PO 148621: samme leverandør har både fakturaen 8281805845 og kreditnotaen
+// 8284689594 (negativt beløp) mot samme artikkel. Før ble bare én av dem valgt.
+test('collectMediusInvoices: faktura og kreditnota på samme PO vises begge, faktura først', () => {
+  const { collectMediusInvoices } = require('../src/avvikSync');
+  const invoice = { invoice_number: '8281805845', medius_link: 'https://m/1', processing_status: 'Open', document_id: '64612a97', amount: 76541.86 };
+  const credit = { invoice_number: '8284689594', medius_link: 'https://m/2', processing_status: 'Open', document_id: 'd2e2e9d3', amount: -22755.83 };
+  const expected = [
+    { invoiceNumber: '8281805845', mediusLink: 'https://m/1', isCreditNote: false },
+    { invoiceNumber: '8284689594', mediusLink: 'https://m/2', isCreditNote: true },
+  ];
+  assert.deepEqual(collectMediusInvoices([credit, invoice]), expected);
+  assert.deepEqual(collectMediusInvoices([invoice, credit]), expected);
+});
+
+test('collectMediusInvoices: samme faktura via flere linjer gir én oppføring, ugyldiggjort droppes når en levende finnes', () => {
+  const { collectMediusInvoices } = require('../src/avvikSync');
+  const a = { invoice_number: 'F1', medius_link: 'l1', processing_status: 'Archived', document_id: 'a', amount: 10 };
+  const aAgain = { ...a };
+  const invalidated = { invoice_number: 'F2', medius_link: 'l2', processing_status: 'Invalidated', document_id: 'b', amount: 10 };
+  assert.deepEqual(collectMediusInvoices([a, aAgain, invalidated]).map((i) => i.invoiceNumber), ['F1']);
+  // en alene-stående ugyldiggjort faktura vises fortsatt, som før
+  assert.deepEqual(collectMediusInvoices([invalidated]).map((i) => i.invoiceNumber), ['F2']);
+});

@@ -2,6 +2,7 @@
 
 const { SEED_AVVIK } = require('./mockData');
 const persistence = require('./persistence');
+const { UNKNOWN_HISTORY_TYPE } = require('./discrepancyTypes');
 
 // Local state (comments, resolved/archived avvik, notification log) is durable
 // via persistence.js, but everything else here is still in memory only: the
@@ -85,6 +86,21 @@ function reopenAvvik(id) {
   return avvik;
 }
 
+// Avvikstype satt for hånd på en arkivsak: dwh kan ikke gjenskape typen for en
+// lukket linje (prosjektnummeret kan være endret, ordrehodet er borte), så den
+// som kjenner saken velger den. Gjelder bare løste avvik. "Ukjent" fjerner
+// valget igjen. Typen står til dwh selv klarer å klassifisere linjen (se
+// mergeHistoryFromDwh/mergeFromDwh). Returnerer avviket, eller null hvis det
+// ikke finnes eller ikke er løst.
+function setManualType(id, type) {
+  const avvik = getAvvik(id);
+  if (!avvik || !avvik.resolved) return null;
+  avvik.discrepancyType = type;
+  avvik.discrepancyTypeManuallySet = type !== UNKNOWN_HISTORY_TYPE;
+  persist();
+  return avvik;
+}
+
 // Manual correction for an avvik whose dwh-resolved case_owner came back as
 // "Sakseier ikke funnet" / "Manuell ordre – sakseier mangler" (see
 // dashboard.js's NO_OWNER_NAMES). Sets purchaserManuallySet so a later
@@ -127,7 +143,9 @@ function listNotifications() {
 
 // Comments are scoped to their avvik, so each avvik's own comment list gets
 // its own id sequence - callers only ever see comments for one avvik at a time.
-function addComment(id, author, text) {
+// attachments: metadata ({ id, name, size }) for files already saved by
+// attachments.js; only present on the comment when there are any.
+function addComment(id, author, text, attachments = []) {
   const avvik = getAvvik(id);
   if (!avvik) return null;
   const comment = {
@@ -135,10 +153,41 @@ function addComment(id, author, text) {
     author,
     text,
     createdAt: new Date().toISOString(),
+    ...(attachments.length ? { attachments } : {}),
   };
   avvik.comments.push(comment);
   persist();
   return comment;
+}
+
+function findComment(avvikId, commentId) {
+  const avvik = getAvvik(avvikId);
+  return avvik ? avvik.comments.find((c) => c.id === commentId) || null : null;
+}
+
+// Rettelse av en kommentar (navn og/eller tekst). Tidspunktet for den
+// opprinnelige kommentaren beholdes, og editedAt viser at den er endret.
+function updateComment(avvikId, commentId, { author, text }) {
+  const comment = findComment(avvikId, commentId);
+  if (!comment) return null;
+  comment.author = author;
+  comment.text = text;
+  comment.editedAt = new Date().toISOString();
+  persist();
+  return comment;
+}
+
+// Tar vedlegget ut av kommentaren og returnerer metadataene (så kalleren kan
+// slette selve filen), eller null hvis det ikke finnes.
+function removeAttachment(avvikId, commentId, attachmentId) {
+  const comment = findComment(avvikId, commentId);
+  if (!comment || !comment.attachments) return null;
+  const index = comment.attachments.findIndex((a) => a.id === attachmentId);
+  if (index === -1) return null;
+  const [removed] = comment.attachments.splice(index, 1);
+  if (!comment.attachments.length) delete comment.attachments;
+  persist();
+  return removed;
 }
 
 // Reconciles a fresh batch of dwh-derived avvik (see src/avvikSync.js) into
@@ -189,6 +238,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.lotNumber = fresh.lotNumber;
       existing.invoiceNumber = fresh.invoiceNumber;
       existing.mediusLink = fresh.mediusLink;
+      existing.invoices = fresh.invoices;
       existing.ticketUrl = fresh.ticketUrl;
       existing.totalQuantity = fresh.totalQuantity;
       existing.resoldQuantity = fresh.resoldQuantity;
@@ -199,12 +249,16 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.invoiceSuggestions = fresh.invoiceSuggestions;
       existing.supplierName = fresh.supplierName;
       existing.projectNumber = fresh.projectNumber;
+      existing.receivedAt = fresh.receivedAt;
       if (!existing.purchaserManuallySet) {
         existing.purchaserName = fresh.purchaserName;
         existing.purchaserEmail = fresh.purchaserEmail;
         existing.department = fresh.department;
       }
+      // dwh classifies a line that is open again itself, which outranks a type
+      // someone set by hand while it sat in the archive (see setManualType).
       existing.discrepancyType = fresh.discrepancyType;
+      existing.discrepancyTypeManuallySet = false;
       existing.createdAt = fresh.createdAt;
       existing.daysWaiting = fresh.daysWaiting;
       existing.missingFromLastSyncAt = null;
@@ -246,6 +300,66 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
   return { updated, inserted, archived, reopened };
 }
 
+// Closed avvik read back from dwh's supplier_order_line_copy (see
+// avvikSync.js's syncResolvedHistory). They are what makes the archive and the
+// trend chart survive a restart: this app's own state file does not, on
+// Minato, but the copy table is permanent.
+//   - A row this app has never seen is added as already resolved (source
+//     'auto', so it still reopens if dwh ever returns it as 3030 again).
+//   - A row it already holds as 'auto' gets the real archive date: mergeFromDwh
+//     could only stamp the moment the line went missing from a sync, which is
+//     the sync time, not the invoice date.
+//   - A 'manual' resolve is a person's decision and keeps its own date.
+//   - A row still open here is left alone; the next sync decides it.
+function mergeHistoryFromDwh(historyRows) {
+  const byId = new Map(avvikList.map((a) => [a.id, a]));
+  let inserted = 0;
+  let dated = 0;
+  for (const row of historyRows) {
+    const existing = byId.get(row.id);
+    if (!existing) {
+      avvikList.push({
+        ...row,
+        resolved: true,
+        resolvedSource: 'auto',
+        lastNotifiedAt: null,
+        comments: [],
+        missingFromLastSyncAt: null,
+        purchaserManuallySet: false,
+      });
+      inserted += 1;
+    } else if (existing.resolved && existing.resolvedSource === 'auto') {
+      existing.resolvedAt = row.resolvedAt;
+      existing.receivedAt = row.receivedAt;
+      existing.daysWaiting = row.daysWaiting;
+      // A row stored as unknown gets the type dwh can now tell (see
+      // avvikSync.js's classifyResolvedType). A type the app itself recorded
+      // while the line was still open is never overwritten.
+      // The same goes for a type set by hand: it stands only until dwh can
+      // classify the line itself, which then takes over.
+      if (
+        row.discrepancyType !== UNKNOWN_HISTORY_TYPE &&
+        (existing.discrepancyType === UNKNOWN_HISTORY_TYPE || existing.discrepancyTypeManuallySet)
+      ) {
+        existing.discrepancyType = row.discrepancyType;
+        existing.discrepancyTypeManuallySet = false;
+      }
+      // An owner found later (the ticket-per-PO lookup, or state saved before
+      // it existed) fills a blank, but never overwrites a name a person typed
+      // in or one dwh already gave this row.
+      if (!existing.purchaserManuallySet && !existing.purchaserName && row.purchaserName) {
+        existing.purchaserName = row.purchaserName;
+        existing.purchaserEmail = row.purchaserEmail;
+        existing.department = row.department || existing.department;
+        existing.ticketUrl = row.ticketUrl || existing.ticketUrl;
+      }
+      dated += 1;
+    }
+  }
+  persist();
+  return { inserted, dated };
+}
+
 // Test-only helper to reset state between test files. Doesn't persist, so a
 // test run can never overwrite a developer's real state.json.
 function _reset() {
@@ -268,11 +382,15 @@ module.exports = {
   initPersistence,
   resolveAvvik,
   reopenAvvik,
+  setManualType,
   setManualPurchaser,
   recordNotification,
   listNotifications,
   addComment,
+  updateComment,
+  removeAttachment,
   mergeFromDwh,
+  mergeHistoryFromDwh,
   _reset,
   _enablePersistenceAt,
 };

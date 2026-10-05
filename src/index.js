@@ -7,9 +7,11 @@ const store = require('./store');
 const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
-const { syncAvvikFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
+const { syncAvvikFromDwh, syncResolvedHistory, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
-const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
+const attachments = require('./attachments');
+const { ALL_DISCREPANCY_TYPES, UNKNOWN_HISTORY_TYPE } = require('./discrepancyTypes');
+const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderUtviklingPage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
 
 const PORT = process.env.PORT || 8080;
 
@@ -23,6 +25,22 @@ const TICKET_MANAGER_LOGO_PNG = fs.readFileSync(path.join(__dirname, 'assets', '
 // strings (see avvikSync.js's buildSyntheticId) - store.getAvvik/resolveAvvik/
 // addComment compare ids with ===, so a route param must be parsed back to
 // the same type the id was stored as, not blindly converted to a Number.
+// One full dwh refresh: the open avvik first, then the closed history that
+// feeds the archive and the trend chart. Sequential, not parallel, for the
+// same heap reason as avvikSync.js's own queries. A history failure never
+// discards the open-avvik result - the open list is what people act on.
+async function refreshFromDwh() {
+  const freshAvvikRows = await syncAvvikFromDwh();
+  const result = store.mergeFromDwh(freshAvvikRows);
+  try {
+    result.history = store.mergeHistoryFromDwh(await syncResolvedHistory());
+  } catch (err) {
+    console.warn(`dwh history sync failed, keeping current archive: ${err.message}`);
+    result.history = null;
+  }
+  return result;
+}
+
 function parseAvvikId(raw) {
   return /^\d+$/.test(raw) ? Number(raw) : raw;
 }
@@ -34,6 +52,32 @@ function sendJson(res, status, body) {
 }
 
 const MAX_BODY_BYTES = 10_000;
+
+// Kommentar med vedlegg kommer som multipart/form-data. Hele forespørselen
+// leses til minne (maks MAX_REQUEST_BYTES, avbrutt underveis hvis den blir
+// større) og tolkes med Node sin innebygde FormData-parser.
+async function readMultipartBody(req) {
+  const declared = Number(req.headers['content-length']);
+  if (declared > attachments.MAX_REQUEST_BYTES) {
+    throw Object.assign(new Error('payload too large'), { status: 413 });
+  }
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > attachments.MAX_REQUEST_BYTES) {
+      throw Object.assign(new Error('payload too large'), { status: 413 });
+    }
+    chunks.push(chunk);
+  }
+  try {
+    return await new Response(Buffer.concat(chunks), {
+      headers: { 'content-type': req.headers['content-type'] },
+    }).formData();
+  } catch {
+    throw Object.assign(new Error('invalid multipart body'), { status: 400 });
+  }
+}
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -114,6 +158,12 @@ function createServer() {
         return res.end(html);
       }
 
+      if (req.method === 'GET' && pathname === '/utvikling') {
+        const html = renderUtviklingPage(store.listAvvik());
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
       if (req.method === 'GET' && pathname === '/arkiv') {
         const html = renderArchivePage(store.listAvvik(), store.listNotifications());
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -188,8 +238,27 @@ function createServer() {
         return sendJson(res, 200, buildEmailPreview(avvik));
       }
 
-      const commentMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/comments$/);
-      if (req.method === 'POST' && commentMatch) {
+      const attachmentMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/attachments\/([^/]+)$/);
+      if (req.method === 'GET' && attachmentMatch) {
+        const avvik = store.getAvvik(parseAvvikId(attachmentMatch[1]));
+        const meta = avvik && avvik.comments.flatMap((c) => c.attachments || []).find((a) => a.id === attachmentMatch[2]);
+        const file = meta && attachments.filePath(avvik.id, meta.id);
+        if (!file || !fs.existsSync(file)) return sendJson(res, 404, { error: 'attachment not found' });
+        // Alltid nedlasting, aldri inline: se attachments.js.
+        const ascii = meta.name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '_');
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': meta.size,
+          'Content-Disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(meta.name)}`,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, no-store',
+        });
+        return fs.createReadStream(file).pipe(res);
+      }
+
+      // Rette en kommentar (navn og tekst), med samme krav som ved opprettelse.
+      const commentEditMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/comments\/(\d+)$/);
+      if (req.method === 'PATCH' && commentEditMatch) {
         let body;
         try {
           body = await readJsonBody(req);
@@ -204,8 +273,81 @@ function createServer() {
         if (author.length > 100 || text.length > 2000) {
           return sendJson(res, 400, { error: 'author or text is too long' });
         }
-        const comment = store.addComment(parseAvvikId(commentMatch[1]), author, text);
-        if (!comment) return sendJson(res, 404, { error: 'avvik not found' });
+        const comment = store.updateComment(parseAvvikId(commentEditMatch[1]), Number(commentEditMatch[2]), { author, text });
+        if (!comment) return sendJson(res, 404, { error: 'comment not found' });
+        return sendJson(res, 200, comment);
+      }
+
+      // Fjerne ett vedlegg: metadata først, så filen.
+      const attachmentDeleteMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/comments\/(\d+)\/attachments\/([^/]+)$/);
+      if (req.method === 'DELETE' && attachmentDeleteMatch) {
+        const avvikId = parseAvvikId(attachmentDeleteMatch[1]);
+        const removed = store.removeAttachment(avvikId, Number(attachmentDeleteMatch[2]), attachmentDeleteMatch[3]);
+        if (!removed) return sendJson(res, 404, { error: 'attachment not found' });
+        attachments.removeFiles(avvikId, [removed]);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Sette avvikstype for hånd på en arkivsak (se store.setManualType).
+      const typeMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/type$/);
+      if (req.method === 'PATCH' && typeMatch) {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (err) {
+          return sendJson(res, err.status || 400, { error: err.message });
+        }
+        if (typeof body.type !== 'string' || ![...ALL_DISCREPANCY_TYPES, UNKNOWN_HISTORY_TYPE].includes(body.type)) {
+          return sendJson(res, 400, { error: 'unknown discrepancy type' });
+        }
+        const avvik = store.setManualType(parseAvvikId(typeMatch[1]), body.type);
+        if (!avvik) return sendJson(res, 404, { error: 'archived avvik not found' });
+        return sendJson(res, 200, { id: avvik.id, discrepancyType: avvik.discrepancyType, manual: avvik.discrepancyTypeManuallySet });
+      }
+
+      const commentMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/comments$/);
+      if (req.method === 'POST' && commentMatch) {
+        // JSON (bare kommentar) eller multipart (kommentar + vedlegg).
+        const isMultipart = /^multipart\/form-data/i.test(req.headers['content-type'] || '');
+        let body;
+        let files = [];
+        try {
+          if (isMultipart) {
+            const form = await readMultipartBody(req);
+            body = { author: form.get('author'), text: form.get('text') };
+            files = form.getAll('files').filter((f) => typeof f !== 'string' && f.size > 0);
+          } else {
+            body = await readJsonBody(req);
+          }
+        } catch (err) {
+          return sendJson(res, err.status || 400, { error: err.message });
+        }
+        const author = typeof body.author === 'string' ? body.author.trim() : '';
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        // Vedlegg hører alltid til en kommentar med navn - det er det som
+        // gir saken status "Oppdatert".
+        if (!author || !text) {
+          return sendJson(res, 400, { error: 'author and text are required' });
+        }
+        if (author.length > 100 || text.length > 2000) {
+          return sendJson(res, 400, { error: 'author or text is too long' });
+        }
+        const avvikId = parseAvvikId(commentMatch[1]);
+        if (!store.getAvvik(avvikId)) return sendJson(res, 404, { error: 'avvik not found' });
+        const fileError = attachments.validateFiles(files);
+        if (fileError) return sendJson(res, 400, { error: fileError });
+        let saved;
+        try {
+          saved = await attachments.saveFiles(avvikId, files);
+        } catch (err) {
+          console.warn(`could not save attachments: ${err.message}`);
+          return sendJson(res, 500, { error: 'could not save attachments' });
+        }
+        const comment = store.addComment(avvikId, author, text, saved);
+        if (!comment) {
+          attachments.removeFiles(avvikId, saved);
+          return sendJson(res, 404, { error: 'avvik not found' });
+        }
         return sendJson(res, 201, comment);
       }
 
@@ -220,8 +362,7 @@ function createServer() {
 
       if (req.method === 'POST' && pathname === '/api/dwh/refresh-avvik') {
         try {
-          const freshAvvikRows = await syncAvvikFromDwh();
-          const result = store.mergeFromDwh(freshAvvikRows);
+          const result = await refreshFromDwh();
           return sendJson(res, 200, result);
         } catch (err) {
           return sendJson(res, 502, { ok: false, error: err.message });
@@ -255,11 +396,11 @@ if (require.main === module) {
   // Best-effort: keep the mock-seeded state if the dwh isn't reachable yet
   // (e.g. the link isn't attached in this environment) rather than failing
   // startup over it.
-  syncAvvikFromDwh()
-    .then((freshAvvikRows) => {
-      const result = store.mergeFromDwh(freshAvvikRows);
+  refreshFromDwh()
+    .then((result) => {
+      const history = result.history ? `, history ${result.history.inserted} added / ${result.history.dated} dated` : '';
       console.log(
-        `dwh startup sync: ${result.updated} updated, ${result.inserted} inserted, ${result.archived} archived, ${result.reopened} reopened`
+        `dwh startup sync: ${result.updated} updated, ${result.inserted} inserted, ${result.archived} archived, ${result.reopened} reopened${history}`
       );
     })
     .catch((err) => {

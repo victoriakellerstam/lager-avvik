@@ -3,8 +3,15 @@
 const crypto = require('node:crypto');
 const { getTypeBadgeClass } = require('./typeBadges');
 const { isFinanceCase } = require('./financeTypes');
-const { KOSTNADSFAKTURA_REVERSER, KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT } = require('./discrepancyTypes');
+const {
+  KOSTNADSFAKTURA_REVERSER,
+  KREDITTKORT_LISENSKJOP_FEILAKTIG_MOTTATT,
+  ALL_DISCREPANCY_TYPES,
+  UNKNOWN_HISTORY_TYPE,
+} = require('./discrepancyTypes');
 const { getAvvikDetailContent } = require('./avvikDetailContent');
+const { buildDailySeries, buildChartItems, CHART_FROM } = require('./history');
+const { MAX_FILES, MAX_FILE_BYTES, ALLOWED_EXTENSIONS } = require('./attachments');
 
 function escapeHtml(value) {
   return String(value)
@@ -14,12 +21,45 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function renderComments(comments) {
+// Leverandørnavnet slik det vises og filtreres på (tom leverandør samles under
+// ett navn, felles for radene og for Utvikling-diagrammet).
+const UNKNOWN_SUPPLIER = 'Ukjent leverandør';
+function supplierLabel(a) {
+  return (a.supplierName || '').trim() || UNKNOWN_SUPPLIER;
+}
+
+function formatFileSize(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+// Vedlegg hører til kommentaren de ble lagt til med, og lastes ned via
+// /api/avvik/:id/attachments/:vedleggs-id (alltid som nedlasting).
+function renderAttachments(attachments, avvikId, commentId) {
+  if (!attachments || !attachments.length) return '';
+  const items = attachments
+    .map(
+      (att) => `<li><i class="fa-solid fa-paperclip" aria-hidden="true"></i>
+        <a class="bf-link" href="/api/avvik/${encodeURIComponent(avvikId)}/attachments/${encodeURIComponent(att.id)}" download>${escapeHtml(att.name)}</a>
+        <span class="ts">(${formatFileSize(att.size)})</span>
+        <button type="button" class="bf-link comment-action remove-attachment" data-avvik="${escapeHtml(avvikId)}" data-comment="${commentId}" data-attachment="${escapeHtml(att.id)}" data-name="${escapeHtml(att.name)}" aria-label="Fjern vedlegget ${escapeHtml(att.name)}">Fjern</button></li>`
+    )
+    .join('');
+  return `<ul class="attachments">${items}</ul>`;
+}
+
+// Hver kommentar kan rettes (navn og tekst) og vedleggene kan fjernes enkeltvis;
+// knappene styres av delegerte klikk-handlere i SHARED_SCRIPT. Rå verdier ligger
+// i data-attributter så redigeringsskjemaet kan fylles ut.
+function renderComments(comments, avvikId) {
   if (!comments.length) return '<li class="empty">Ingen kommentarer enna.</li>';
   return comments
     .map(
-      (c) => `<li><strong>${escapeHtml(c.author)}:</strong> ${escapeHtml(c.text)}
-        <span class="ts">(${new Date(c.createdAt).toLocaleString('no-NO')})</span></li>`
+      (c) => `<li data-avvik="${escapeHtml(avvikId)}" data-comment="${c.id}" data-author="${escapeHtml(c.author)}" data-text="${escapeHtml(c.text)}">
+        <span class="comment-body"><strong>${escapeHtml(c.author)}:</strong> ${escapeHtml(c.text)}
+        <span class="ts">(${new Date(c.createdAt).toLocaleString('no-NO')}${c.editedAt ? ', redigert' : ''})</span>
+        <button type="button" class="bf-link comment-action edit-comment">Rediger</button></span>
+        ${renderAttachments(c.attachments, avvikId, c.id)}</li>`
     )
     .join('');
 }
@@ -183,10 +223,23 @@ function renderStats(openAvvikList, resolvedCount) {
   </div>`;
 }
 
+// Open rows show how long the line has waited so far (daysWaiting, from dwh).
+// An archived row shows receipt -> resolved instead: daysWaiting is frozen at
+// whatever it was when dwh last returned the line, which is not the time it
+// took to resolve. Falls back to daysWaiting only when there is no receipt
+// date to count from.
+function formatDaysCell(a, dateField) {
+  if (dateField === 'resolvedAt' && a.receivedAt && a.resolvedAt) {
+    const days = Math.round((Date.parse(a.resolvedAt) - Date.parse(a.receivedAt)) / 86400000);
+    if (Number.isFinite(days)) return days;
+  }
+  return typeof a.daysWaiting === 'number' ? a.daysWaiting : '—';
+}
+
 function renderAvvikRow(
   a,
   notifications,
-  { actionButton, dateField, showPurchaserForm, showSku, showDateColumn = true, showNotifiedColumn = true }
+  { actionButton, dateField, showPurchaserForm, showSku, showDateColumn = true, showNotifiedColumn = true, openList = false, editableType = false, commentButton = false }
 ) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
   const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
@@ -209,6 +262,33 @@ function renderAvvikRow(
       ? escapeHtml(a.purchaserName)
       : '—';
   const skuCell = showSku ? `<td>${a.articleNumber ? escapeHtml(a.articleNumber) : '—'}</td>` : '';
+  // Manuell ordre har ikke PO-nummer (dwh gir NULL på de radene), så feltet
+  // står tomt der. Vises bare der SKU vises, dvs. i listen over åpne avvik.
+  const poCell = showSku ? `<td>${a.poNumber ? escapeHtml(a.poNumber) : ''}</td>` : '';
+  // Status i listen over åpne avvik: "Oppdatert" så snart noen har kommentert,
+  // ellers "Venter på innkjøper". Beregnes ved visning, lagres ikke.
+  const statusCell = openList
+    ? `<td>${a.comments.length > 0
+        ? '<span class="status-pill status-pill-updated">Oppdatert</span>'
+        : '<span class="status-pill status-pill-waiting">Venter på innkjøper</span>'}</td>`
+    : '';
+  // I åpne avvik er kommentarvisningen en knapp ("Legg til kommentar") i
+  // samme stil som "Marker løst"; den åpner kommentarlisten og skjemaet.
+  // I arkivet står "N kommentarer" som en knapp (som "Gjenåpne"), ellers som lenke.
+  const commentCountLabel = `${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}`;
+  const commentSummary = openList
+    ? '<summary class="bf-button bf-button-small comment-button">Legg til kommentar</summary>'
+    : commentButton
+      ? `<summary class="bf-button bf-button-small comment-button">${commentCountLabel}</summary>`
+      : `<summary class="bf-link">${commentCountLabel}</summary>`;
+  // Arkivet: avvikstypen kan settes for hånd (dwh kan ikke gjenskape den for en
+  // lukket linje), se store.setManualType. "Endre" byttes ut med en
+  // nedtrekksliste av klientskriptet.
+  const typeBadge = `<span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span>`;
+  const typeCell = editableType
+    ? `<td class="type-cell" data-id="${escapeHtml(a.id)}" data-current="${escapeHtml(a.discrepancyType)}">${typeBadge}${a.discrepancyTypeManuallySet ? ' <span class="ts">(satt manuelt)</span>' : ''}
+        <button type="button" class="bf-link comment-action change-type" aria-label="Endre avvikstype for ordre ${escapeHtml(a.orderId)}">Endre</button></td>`
+    : `<td>${typeBadge}</td>`;
   const dateCell = showDateColumn ? `<td>${dateValue ? new Date(dateValue).toLocaleDateString('no-NO') : '—'}</td>` : '';
   const notifiedCell = showNotifiedColumn
     ? `<td>
@@ -227,23 +307,32 @@ function renderAvvikRow(
   // detail page itself (renderAvvikDetailPage), so nothing is lost by
   // navigating straight there.
   return `
-    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-po="${escapeHtml((a.poNumber || '').toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}" data-label-order="${escapeHtml(a.orderId)}" data-label-po="${escapeHtml(a.poNumber || '')}" data-label-purchaser="${escapeHtml(a.purchaserName || '')}" data-label-department="${escapeHtml(a.department || '')}" data-label-type="${escapeHtml(a.discrepancyType)}" data-supplier="${escapeHtml(supplierLabel(a).toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
+      ${poCell}
+      ${statusCell}
       ${skuCell}
       <td>${purchaserCell}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
-      <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
-      <td>${typeof a.daysWaiting === 'number' ? a.daysWaiting : '—'}</td>
+      ${typeCell}
+      <td>${formatDaysCell(a, dateField)}</td>
       ${dateCell}
       ${actionCell}
       <td>
         <details>
-          <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
-          <ul class="comments">${renderComments(a.comments)}</ul>
+          ${commentSummary}
+          <ul class="comments">${renderComments(a.comments, a.id)}</ul>
           <form class="add-comment" data-id="${a.id}">
             <input type="text" class="bf-input" name="author" placeholder="Ditt navn" required maxlength="100">
             <input type="text" class="bf-input" name="text" placeholder="Skriv en kommentar" required maxlength="2000">
+            ${openList
+              ? `<label class="file-pick">
+              <span>Vedlegg (valgfritt, maks ${MAX_FILES} filer à ${MAX_FILE_BYTES / (1024 * 1024)} MB). Navn og kommentar må fylles ut.</span>
+              <input type="file" name="files" multiple accept="${[...ALLOWED_EXTENSIONS].map((e) => '.' + e).join(',')}">
+            </label>`
+              : ''}
             <button type="submit" class="bf-button bf-button-small">Legg til</button>
+            <p class="form-error" role="alert" hidden></p>
           </form>
         </details>
       </td>
@@ -257,7 +346,7 @@ function renderAvvikRow(
 // cases alongside genuine Spesielle caser - Finance ones.
 function renderFinanceRow(a) {
   return `
-    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}">
+    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-po="${escapeHtml((a.poNumber || '').toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}" data-label-order="${escapeHtml(a.orderId)}" data-label-po="${escapeHtml(a.poNumber || '')}" data-label-purchaser="${escapeHtml(a.purchaserName || '')}" data-label-department="${escapeHtml(a.department || '')}" data-label-type="${escapeHtml(a.discrepancyType)}" data-supplier="${escapeHtml(supplierLabel(a).toLowerCase())}">
       <td>${escapeHtml(a.orderId)}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
@@ -266,7 +355,7 @@ function renderFinanceRow(a) {
       <td>
         <details>
           <summary class="bf-link">${a.comments.length} kommentar${a.comments.length === 1 ? '' : 'er'}</summary>
-          <ul class="comments">${renderComments(a.comments)}</ul>
+          <ul class="comments">${renderComments(a.comments, a.id)}</ul>
           <form class="add-comment" data-id="${a.id}">
             <input type="text" class="bf-input" name="author" placeholder="Ditt navn" required maxlength="100">
             <input type="text" class="bf-input" name="text" placeholder="Skriv en kommentar" required maxlength="2000">
@@ -284,6 +373,17 @@ function renderFinanceRow(a) {
 // normal open-avvik list, same idea as the Finance section.
 const NO_OWNER_NAMES = new Set(['Sakseier ikke funnet', 'Manuell ordre – sakseier mangler']);
 const byDaysWaitingDesc = (a, b) => (b.daysWaiting || 0) - (a.daysWaiting || 0);
+
+// Åpne avvik: de som har fått en kommentar (status "Oppdatert") øverst, den
+// sist kommenterte først; resten som før etter dager siden mottak.
+const lastCommentAt = (a) => a.comments.reduce((latest, c) => (c.createdAt > latest ? c.createdAt : latest), '');
+const byUpdatedFirst = (a, b) => {
+  const aUpdated = a.comments.length > 0;
+  const bUpdated = b.comments.length > 0;
+  if (aUpdated !== bUpdated) return aUpdated ? -1 : 1;
+  if (aUpdated) return lastCommentAt(b).localeCompare(lastCommentAt(a)) || byDaysWaitingDesc(a, b);
+  return byDaysWaitingDesc(a, b);
+};
 
 // Kostnadsfaktura — reverser lives in the Finance section too (its own
 // resolve workflow is Finance-internal, same as the other Finance cases),
@@ -321,7 +421,7 @@ function splitAvvik(avvikList) {
   const isOpenNoOwner = (a) => !a.resolved && NO_OWNER_NAMES.has(a.purchaserName);
   const noOwnerCases = withoutFinance.filter(isOpenNoOwner).sort(byDaysWaitingDesc);
   const rest = withoutFinance.filter((a) => !isOpenNoOwner(a));
-  const open = rest.filter((a) => !a.resolved).sort(byDaysWaitingDesc);
+  const open = rest.filter((a) => !a.resolved).sort(byUpdatedFirst);
   // Most recently resolved first, so the archive reads as a running history
   // (the "Løst" date column) rather than an arbitrary order. Ordered by
   // resolvedAt, not daysWaiting: an archived row's daysWaiting is frozen at
@@ -338,6 +438,7 @@ const NAV_ITEMS = [
   { key: 'open', href: '/', label: 'Åpne avvik', icon: 'fa-list-check' },
   { key: 'finance', href: '/finance', label: 'Saker som løses av Finance', icon: 'fa-coins' },
   { key: 'archive', href: '/arkiv', label: 'Arkiv', icon: 'fa-box-archive' },
+  { key: 'utvikling', href: '/utvikling', label: 'Utvikling', icon: 'fa-chart-line' },
 ];
 
 function renderSkipLink() {
@@ -533,34 +634,13 @@ const SHARED_SCRIPT = `
       });
     })();
 
-    // "Forslag til faktura" on the avvik detail page starts collapsed (see
-    // renderInvoiceSuggestions) - a plain show/hide toggle, not present at
-    // all when there's nothing to suggest.
-    (function () {
-      const toggle = document.getElementById('invoice-suggestions-toggle');
-      const list = document.getElementById('invoice-suggestions-list');
-      if (!toggle || !list) return;
-      const label = toggle.querySelector('.suggestions-toggle-label');
-      const icon = toggle.querySelector('i');
-      toggle.addEventListener('click', () => {
-        const willShow = list.hidden;
-        list.hidden = !willShow;
-        toggle.setAttribute('aria-expanded', String(willShow));
-        if (label) label.textContent = willShow ? 'Skjul forslag' : 'Vis forslag';
-        if (icon) {
-          icon.classList.toggle('fa-chevron-down', !willShow);
-          icon.classList.toggle('fa-chevron-up', willShow);
-        }
-      });
-    })();
-
     // Clicking (or pressing Enter/Space while focused on) an avvik row that
     // isn't itself interactive navigates straight to that avvik's detail
     // page - the same target as its old "Dette må gjøres"/"Mer informasjon"
     // link, just without an intermediate expand step. A <tr> isn't natively
     // clickable/focusable, hence tabindex + the explicit keydown handling.
     document.querySelectorAll('.avvik-row[data-href]').forEach((row) => {
-      const isOwnInteractive = (e) => e.target.closest('button, a, input, textarea, form, details, summary');
+      const isOwnInteractive = (e) => e.target.closest('button, a, input, textarea, select, form, details, summary');
       row.addEventListener('click', (e) => {
         if (isOwnInteractive(e)) return;
         window.location.href = row.dataset.href;
@@ -632,12 +712,142 @@ const SHARED_SCRIPT = `
         const id = form.dataset.id;
         const author = form.author.value;
         const text = form.text.value;
-        const res = await fetch('/api/avvik/' + id + '/comments', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ author, text }),
-        });
-        if (res.ok) location.reload();
+        const errorEl = form.querySelector('.form-error');
+        const fail = (msg) => { errorEl.textContent = msg; errorEl.hidden = false; };
+        errorEl.hidden = true;
+        const files = form.files ? [...form.files.files] : [];
+        // Kommentar med vedlegg sendes som multipart, uten vedlegg som JSON.
+        let req;
+        if (files.length) {
+          if (files.length > ${MAX_FILES}) return fail('Maks ${MAX_FILES} vedlegg per kommentar.');
+          const tooBig = files.find((f) => f.size > ${MAX_FILE_BYTES});
+          if (tooBig) return fail('«' + tooBig.name + '» er større enn ${MAX_FILE_BYTES / (1024 * 1024)} MB.');
+          const data = new FormData();
+          data.append('author', author);
+          data.append('text', text);
+          files.forEach((f) => data.append('files', f));
+          req = { method: 'POST', body: data };
+        } else {
+          req = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author, text }) };
+        }
+        const submit = form.querySelector('button[type="submit"]');
+        submit.disabled = true;
+        try {
+          const res = await fetch('/api/avvik/' + id + '/comments', req);
+          if (res.ok) return location.reload();
+          const err = await res.json().catch(() => ({}));
+          fail(err.error || 'Kunne ikke lagre kommentaren (' + res.status + ').');
+        } catch (e2) {
+          fail('Kunne ikke lagre kommentaren: ' + e2.message);
+        }
+        submit.disabled = false;
+      });
+    });
+    // Arkivet: "Endre" ved avvikstypen bytter badgen ut med en nedtrekksliste.
+    // Et valg lagres på serveren (PATCH .../type) og siden lastes på nytt;
+    // "Avbryt" eller Escape legger tilbake den opprinnelige cellen.
+    const DISCREPANCY_TYPES = ${JSON.stringify([...ALL_DISCREPANCY_TYPES, UNKNOWN_HISTORY_TYPE])};
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.change-type');
+      if (!btn) return;
+      const cell = btn.closest('td.type-cell');
+      if (!cell || cell.querySelector('select')) return;
+      const original = [...cell.childNodes];
+      const select = document.createElement('select');
+      select.className = 'bf-input type-select';
+      select.setAttribute('aria-label', 'Avvikstype');
+      DISCREPANCY_TYPES.forEach((type) => {
+        const opt = document.createElement('option');
+        opt.value = type; opt.textContent = type;
+        if (type === cell.dataset.current) opt.selected = true;
+        select.appendChild(opt);
+      });
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.className = 'bf-link comment-action'; cancel.textContent = 'Avbryt';
+      const restore = () => cell.replaceChildren(...original);
+      cancel.addEventListener('click', restore);
+      select.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') restore(); });
+      select.addEventListener('change', async () => {
+        select.disabled = true;
+        try {
+          const res = await fetch('/api/avvik/' + encodeURIComponent(cell.dataset.id) + '/type', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: select.value }),
+          });
+          if (res.ok) return location.reload();
+          window.alert('Kunne ikke lagre avvikstypen (' + res.status + ').');
+        } catch (err) {
+          window.alert('Kunne ikke lagre avvikstypen: ' + err.message);
+        }
+        restore();
+      });
+      cell.replaceChildren(select, cancel);
+      select.focus();
+    });
+    // Rette en kommentar og fjerne vedlegg. Delegerte klikk, siden listene
+    // finnes i hver rad og på detaljsiden. Begge endringer lagres på serveren
+    // og siden lastes på nytt, som ved nye kommentarer.
+    document.addEventListener('click', async (e) => {
+      const removeBtn = e.target.closest('.remove-attachment');
+      if (removeBtn) {
+        if (!window.confirm('Fjerne vedlegget «' + removeBtn.dataset.name + '»? Filen slettes.')) return;
+        removeBtn.disabled = true;
+        try {
+          const res = await fetch(
+            '/api/avvik/' + encodeURIComponent(removeBtn.dataset.avvik) + '/comments/' + removeBtn.dataset.comment +
+              '/attachments/' + encodeURIComponent(removeBtn.dataset.attachment),
+            { method: 'DELETE' }
+          );
+          if (res.ok) return location.reload();
+          window.alert('Kunne ikke fjerne vedlegget (' + res.status + ').');
+        } catch (err) {
+          window.alert('Kunne ikke fjerne vedlegget: ' + err.message);
+        }
+        removeBtn.disabled = false;
+        return;
+      }
+      const editBtn = e.target.closest('.edit-comment');
+      if (!editBtn) return;
+      const li = editBtn.closest('li[data-comment]');
+      if (!li || li.querySelector('.edit-comment-form')) return;
+      const body = li.querySelector('.comment-body');
+      const form = document.createElement('form');
+      form.className = 'edit-comment-form';
+      const author = document.createElement('input');
+      author.type = 'text'; author.className = 'bf-input'; author.name = 'author'; author.required = true; author.maxLength = 100;
+      author.value = li.dataset.author; author.setAttribute('aria-label', 'Navn');
+      const text = document.createElement('input');
+      text.type = 'text'; text.className = 'bf-input'; text.name = 'text'; text.required = true; text.maxLength = 2000;
+      text.value = li.dataset.text; text.setAttribute('aria-label', 'Kommentar');
+      const save = document.createElement('button');
+      save.type = 'submit'; save.className = 'bf-button bf-button-small'; save.textContent = 'Lagre';
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.className = 'bf-button bf-button-small'; cancel.textContent = 'Avbryt';
+      const error = document.createElement('p');
+      error.className = 'form-error'; error.setAttribute('role', 'alert'); error.hidden = true;
+      form.append(author, text, save, cancel, error);
+      body.hidden = true;
+      body.after(form);
+      text.focus();
+      cancel.addEventListener('click', () => { form.remove(); body.hidden = false; });
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        error.hidden = true;
+        save.disabled = true;
+        try {
+          const res = await fetch(
+            '/api/avvik/' + encodeURIComponent(li.dataset.avvik) + '/comments/' + li.dataset.comment,
+            { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: author.value, text: text.value }) }
+          );
+          if (res.ok) return location.reload();
+          const err = await res.json().catch(() => ({}));
+          error.textContent = err.error || 'Kunne ikke lagre rettelsen (' + res.status + ').';
+        } catch (err2) {
+          error.textContent = 'Kunne ikke lagre rettelsen: ' + err2.message;
+        }
+        error.hidden = false;
+        save.disabled = false;
       });
     });
     document.querySelectorAll('.set-purchaser').forEach((form) => {
@@ -683,6 +893,140 @@ const SHARED_SCRIPT = `
     // named filter boxes in different sections/pages don't clobber each other.
     document.querySelectorAll('#open-section, #finance-section, #no-owner-section, #archive-section').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
+      // Pil ved siden av hvert filterfelt som åpner en søkbar rullgardin med
+      // alle ulike verdier i kolonnen. Panelet er position: fixed (tabellkortet
+      // har overflow: hidden) og får nøyaktig kolonnens bredde. Valg setter
+      // filterfeltet og sender et vanlig input-event, så filtreringen og
+      // grafen reagerer som om verdien var skrevet inn.
+      function closeCombo() {
+        const s = window.__avvikCombo;
+        if (!s) return;
+        window.__avvikCombo = null;
+        s.panel.remove();
+        s.arrow.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('mousedown', s.onOutside, true);
+        window.removeEventListener('scroll', s.onScroll, true);
+        window.removeEventListener('resize', closeCombo);
+      }
+      function openCombo(input, arrow, cell) {
+        const wasOpen = window.__avvikCombo && window.__avvikCombo.input === input;
+        closeCombo();
+        if (wasOpen) return;
+        const values = new Set();
+        section.querySelectorAll('.avvik-row').forEach((row) => {
+          const v = (row.getAttribute('data-label-' + input.dataset.col) || '').trim();
+          if (v) values.add(v);
+        });
+        const sorted = [...values].sort((x, y) => x.localeCompare(y, 'no', { numeric: true }));
+        const panel = document.createElement('div');
+        panel.className = 'combo-panel';
+        const search = document.createElement('input');
+        search.type = 'text';
+        search.className = 'bf-input combo-search';
+        search.placeholder = 'Søk...';
+        search.autocomplete = 'off';
+        const list = document.createElement('ul');
+        list.className = 'combo-list';
+        list.setAttribute('role', 'listbox');
+        panel.append(search, list);
+        let active = -1;
+        function select(v) {
+          input.value = v;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          closeCombo();
+        }
+        function setActive(i) {
+          const items = list.querySelectorAll('.combo-option');
+          if (!items.length) { active = -1; return; }
+          active = (i + items.length) % items.length;
+          items.forEach((li, idx) => li.classList.toggle('combo-active', idx === active));
+          items[active].scrollIntoView({ block: 'nearest' });
+        }
+        function render() {
+          const q = search.value.trim().toLowerCase();
+          const current = input.value.trim().toLowerCase();
+          list.textContent = '';
+          const entries = q ? [] : [{ label: 'Alle', value: '' }];
+          sorted.forEach((v) => { if (v.toLowerCase().includes(q)) entries.push({ label: v, value: v }); });
+          entries.forEach((e) => {
+            const li = document.createElement('li');
+            li.className = 'combo-option' + (e.value && e.value.toLowerCase() === current ? ' combo-selected' : '');
+            li.setAttribute('role', 'option');
+            li.textContent = e.label;
+            li.addEventListener('click', () => select(e.value));
+            list.appendChild(li);
+          });
+          if (!list.children.length) {
+            const li = document.createElement('li');
+            li.className = 'combo-empty';
+            li.textContent = 'Ingen treff';
+            list.appendChild(li);
+          }
+          active = -1;
+        }
+        render();
+        search.addEventListener('input', () => { render(); setActive(0); });
+        search.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { closeCombo(); arrow.focus(); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(active + 1); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(active - 1); }
+          else if (e.key === 'Enter') {
+            e.preventDefault();
+            const items = list.querySelectorAll('.combo-option');
+            if (items[active >= 0 ? active : 0]) items[active >= 0 ? active : 0].click();
+          }
+        });
+        const r = cell.getBoundingClientRect();
+        panel.style.left = r.left + 'px';
+        panel.style.width = r.width + 'px';
+        const below = window.innerHeight - r.bottom - 12;
+        if (below >= 200 || below >= r.top) {
+          panel.style.top = r.bottom + 'px';
+          panel.style.maxHeight = Math.max(below, 120) + 'px';
+        } else {
+          panel.style.bottom = (window.innerHeight - r.top) + 'px';
+          panel.style.maxHeight = Math.max(r.top - 12, 120) + 'px';
+        }
+        document.body.appendChild(panel);
+        arrow.setAttribute('aria-expanded', 'true');
+        const state = {
+          input, arrow, panel,
+          onOutside: (e) => { if (!panel.contains(e.target) && !arrow.contains(e.target)) closeCombo(); },
+          onScroll: (e) => { if (!panel.contains(e.target)) closeCombo(); },
+        };
+        window.__avvikCombo = state;
+        document.addEventListener('mousedown', state.onOutside, true);
+        window.addEventListener('scroll', state.onScroll, true);
+        window.addEventListener('resize', closeCombo);
+        search.focus();
+      }
+      // Pilen står i overskriftscellen (samme kolonne som filterfeltet), rett
+      // etter teksten "Ordre", "PO-nummer" osv.
+      filterInputs.forEach((el) => {
+        const filterCell = el.closest('th');
+        // Skjult leverandørfilter (fra Utvikling-diagrammet) har ingen kolonne.
+        if (!filterCell) return;
+        const headRow = filterCell.closest('thead').rows[0];
+        const headCell = headRow.cells[filterCell.cellIndex];
+        const arrow = document.createElement('button');
+        arrow.type = 'button';
+        arrow.className = 'filter-arrow';
+        const label = headCell.textContent.trim();
+        arrow.setAttribute('aria-label', 'Vis alle verdier for ' + label);
+        arrow.setAttribute('aria-haspopup', 'listbox');
+        arrow.setAttribute('aria-expanded', 'false');
+        arrow.innerHTML = '<i class="fa-solid fa-chevron-down" aria-hidden="true"></i>';
+        headCell.appendChild(arrow);
+        // Markerer pilen når kolonnen er filtrert, siden filterfeltet er skjult.
+        const syncActive = () => arrow.classList.toggle('filter-active', el.value.trim() !== '');
+        el.addEventListener('input', syncActive);
+        el.addEventListener('change', syncActive);
+        syncActive();
+        arrow.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openCombo(el, arrow, headCell);
+        });
+      });
       // Only #open-section has a matching stat card - null elsewhere, and
       // every use below is guarded on it.
       const filteredCountEl = section.id === 'open-section' ? document.getElementById('filtered-count') : null;
@@ -695,7 +1039,10 @@ const SHARED_SCRIPT = `
         const rows = section.querySelectorAll('.avvik-row');
         let visibleCount = 0;
         rows.forEach((row) => {
-          const match = Object.keys(filters).every((col) => row.dataset[col].includes(filters[col]));
+          // Leverandør matches helt (ikke delvis), så "Arrow" ikke treffer "Arrow ECS".
+          const match = Object.keys(filters).every((col) =>
+            col === 'supplier' ? row.dataset[col] === filters[col] : row.dataset[col].includes(filters[col])
+          );
           row.hidden = !match;
           if (match) visibleCount++;
         });
@@ -709,6 +1056,31 @@ const SHARED_SCRIPT = `
         el.addEventListener('input', applyFilters);
         el.addEventListener('change', applyFilters);
       });
+      // Lenke fra stolpene i leverandørdiagrammet: /?leverandor=<navn> filtrerer
+      // listen på den leverandøren. Chipen over tabellen viser filteret og
+      // fjerner det igjen (også når et annet filter nullstiller feltet).
+      const supplierInput = section.querySelector('.filter-input[data-col="supplier"]');
+      if (supplierInput) {
+        const chip = document.getElementById('supplier-chip');
+        const chipName = document.getElementById('supplier-chip-name');
+        const syncChip = () => {
+          const v = supplierInput.value.trim();
+          chip.hidden = !v;
+          chipName.textContent = v;
+        };
+        // Alle filterfelt, siden Topp 5/diagrammene tømmer de andre feltene.
+        filterInputs.forEach((el) => el.addEventListener('input', syncChip));
+        document.getElementById('supplier-chip-clear').addEventListener('click', () => {
+          supplierInput.value = '';
+          supplierInput.dispatchEvent(new Event('input', { bubbles: true }));
+          history.replaceState(null, '', location.pathname);
+        });
+        const fromUrl = new URLSearchParams(location.search).get('leverandor');
+        if (fromUrl) {
+          supplierInput.value = fromUrl;
+          supplierInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
     });
     // Clicking a name in "Topp 5", a donut legend entry, or a donut segment
     // sets the matching filter box on the open-avvik list and re-runs its
@@ -803,8 +1175,37 @@ const SHARED_STYLE = `
   details summary { cursor: pointer; }
   ul.comments, ul.notif-history { list-style: none; padding: 0; margin: var(--bfs8) 0; }
   ul.comments li, ul.notif-history li { padding: var(--bfs4) 0; border-bottom: var(--bf-border); font-size: var(--bf-font-size-s); }
-  ul.comments li.empty, ul.notif-history li.empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
-  ul.comments .ts { color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
+  ul.comments li.empty, ul.notif-history li.empty { color: var(--bfc-base-c); font-style: italic; }
+  ul.comments .ts { color: var(--bfc-base-c); font-size: var(--bf-font-size-s); }
+  .comments-section h2 { font-size: var(--bf-font-size-h2); margin: 0 0 var(--bfs16); }
+  .comments-section ul.comments { margin: 0; }
+  .comments-section ul.comments li { font-size: var(--bf-font-size-m); }
+  .comments-section ul.comments li:last-child { border-bottom: none; }
+  @media (max-width: 480px) { .comments-section h2 { font-size: var(--bf-font-size-h3); } }
+  /* Status i åpne avvik: bare en ramme i en Bifrost-farge, ingen fyllfarge
+     (Bifrost har ingen oransje; --bfc-warning er den varme). Samme firkantede
+     form og høyde som avvikstype-badgen (.bf-badge: 4px radius, 25px), men
+     med tabellens vanlige skrift (arvet fra cellen) og tekstfarge. */
+  .status-pill { display: inline-block; box-sizing: border-box; padding: 0 6px; border: 2px solid var(--pill-color); border-radius: 4px; background: transparent; color: inherit; font: inherit; line-height: 21px; white-space: nowrap; }
+  .status-pill-waiting { --pill-color: var(--bfc-warning); }
+  .status-pill-updated { --pill-color: var(--bfc-success); }
+  select.type-select { width: auto; max-width: 100%; font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); }
+  .comment-action { margin-left: var(--bfs8); padding: 0; border: none; background: transparent; cursor: pointer; font-size: var(--bf-font-size-s); text-decoration: underline; }
+  .comment-action:disabled { opacity: 0.5; cursor: default; }
+  form.edit-comment-form { display: flex; gap: var(--bfs8); flex-wrap: wrap; margin-top: var(--bfs4); }
+  form.edit-comment-form .bf-input { width: auto; flex: 1 1 10rem; }
+  form.edit-comment-form .form-error { width: 100%; margin: 0; font-size: var(--bf-font-size-s); font-weight: 600; }
+  form.edit-comment-form .form-error:not([hidden])::before { content: "\\26A0\\FE0E  "; }
+  ul.comments ul.attachments { list-style: none; margin: var(--bfs4) 0 0; padding: 0; }
+  ul.comments ul.attachments li { padding: 0; border-bottom: none; }
+  form.add-comment .file-pick { display: flex; flex-direction: column; gap: var(--bfs4); width: 100%; font-size: var(--bf-font-size-s); color: var(--bfc-base-c); }
+  form.add-comment .form-error { width: 100%; margin: 0; color: var(--bfc-base-c); font-size: var(--bf-font-size-s); font-weight: 600; }
+  form.add-comment .form-error:not([hidden])::before { content: "\\26A0\\FE0E  "; }
+  form.add-comment .bf-input::placeholder { color: var(--bfc-base-c); opacity: 0.8; }
+  /* "Legg til kommentar": summary i knappestil ("Marker løst"), uten
+     standard trekant. */
+  summary.comment-button { display: inline-flex; list-style: none; cursor: pointer; white-space: nowrap; }
+  summary.comment-button::-webkit-details-marker { display: none; }
   form.add-comment { margin-top: var(--bfs8); display: flex; gap: var(--bfs8); flex-wrap: wrap; }
   form.add-comment .bf-input { width: auto; }
   form.set-purchaser { display: flex; gap: var(--bfs8); flex-wrap: wrap; }
@@ -812,6 +1213,46 @@ const SHARED_STYLE = `
   .preview-email { margin-top: var(--bfs8); }
   .email-preview { white-space: pre-wrap; background: var(--bfc-base-2); border: var(--bf-border); border-radius: var(--bf-radius-s); padding: var(--bfs12); margin-top: var(--bfs8); font-size: var(--bf-font-size-s); max-width: 32rem; }
   .stats { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
+  #trend-section { display: flex; min-width: 0; margin: 0; }
+  .trend-card { flex: 1; display: flex; min-width: 0; box-shadow: 0 1px 3px var(--bfc-shadow); }
+  .trend-card .bf-card-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .trend-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--bfs8); flex-wrap: wrap; }
+  .trend-title { font-size: var(--bf-font-size-m); font-weight: 600; color: var(--bfc-base-c); }
+  .trend-legend { display: flex; align-items: center; gap: var(--bfs12); font-size: var(--bf-font-size-s); color: var(--bfc-base-c); }
+  .trend-legend [hidden] { display: none; }
+  .legend-line { display: inline-block; width: 1.25rem; border-top: 2px solid; vertical-align: middle; margin-right: var(--bfs4); }
+  .legend-total { border-color: var(--bfc-theme); }
+  .legend-filter { border-color: var(--bfc-base-c); }
+  .trend-chart { position: relative; flex: 1; min-height: 11rem; margin-top: var(--bfs8); }
+  .trend-svg { position: absolute; inset: 0; }
+  .trend-grid { stroke: var(--bfc-base-c); stroke-opacity: 0.15; stroke-width: 1; }
+  .trend-line { stroke: var(--bfc-theme); stroke-width: 2; stroke-linejoin: round; fill: none; }
+  .trend-line-filter { stroke: var(--bfc-base-c); stroke-width: 2; stroke-linejoin: round; fill: none; }
+  .trend-label { fill: var(--bfc-base-c); fill-opacity: 0.7; font-size: 10px; }
+  .trend-hit { fill: transparent; }
+  .trend-hit:hover { fill: var(--bfc-theme); }
+  .trend-note { color: var(--bfc-base-c); opacity: 0.7; font-size: var(--bf-font-size-s); margin-top: var(--bfs4); }
+  /* Utvikling-siden: grafen og leverandørdiagrammet får hele bredden. */
+  .utvikling-page { display: flex; flex-direction: column; gap: var(--bfs24); }
+  .utvikling-trend .trend-chart { min-height: 20rem; }
+  .supplier-card { box-shadow: 0 1px 3px var(--bfc-shadow); }
+  .chart-sub { margin: var(--bfs4) 0 var(--bfs12); color: var(--bfc-base-c); opacity: 0.7; font-size: var(--bf-font-size-s); }
+  .bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .bar-row { display: grid; grid-template-columns: minmax(8rem, 18rem) minmax(0, 1fr); align-items: center; gap: var(--bfs12); padding: 3px var(--bfs8); border-radius: var(--bf-radius-s); outline-offset: -2px; }
+  .bar-row:hover, .bar-row:focus-visible { background: var(--bfc-theme-fade); }
+  a.bar-row { color: inherit; text-decoration: none; cursor: pointer; }
+  .filter-chip { display: inline-flex; align-items: center; gap: var(--bfs4); margin-bottom: var(--bfs12); padding: var(--bfs4) var(--bfs4) var(--bfs4) var(--bfs12); background: var(--bfc-theme-fade); border: var(--bf-border); border-radius: var(--bf-radius-full); font-size: var(--bf-font-size-s); }
+  .filter-chip[hidden] { display: none; }
+  .chip-clear { min-width: 28px; min-height: 28px; }
+  .bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--bf-font-size-s); color: var(--bfc-base-c); text-align: right; }
+  .bar-track { position: relative; height: 18px; margin-right: 3rem; border-left: 1px solid var(--bfc-base-c); border-left-color: color-mix(in srgb, var(--bfc-base-c) 35%, transparent); }
+  .bar-fill { display: block; height: 100%; min-width: 2px; background: var(--bfc-theme); border-radius: 0 4px 4px 0; }
+  .bar-value { position: absolute; top: 50%; transform: translateY(-50%); margin-left: 6px; font-size: var(--bf-font-size-s); font-weight: 600; color: var(--bfc-base-c); white-space: nowrap; }
+  .chart-tooltip { position: fixed; z-index: 70; pointer-events: none; background: var(--bfc-base-3); color: var(--bfc-base-c); border: var(--bf-border); border-radius: var(--bf-radius-s); box-shadow: 0 4px 12px var(--bfc-shadow); padding: var(--bfs8) var(--bfs12); font-size: var(--bf-font-size-s); max-width: 22rem; }
+  .chart-tooltip strong { display: block; font-size: var(--bf-font-size-m); }
+  .chart-table { margin-top: var(--bfs12); }
+  .chart-table table { margin-top: var(--bfs8); max-width: 36rem; }
+  .chart-table td:last-child, .chart-table th:last-child { text-align: right; }
   .stats .bf-card { min-width: 10rem; box-shadow: 0 1px 3px var(--bfc-shadow); }
   .stat-number { font-size: var(--bf-font-size-h2); font-weight: 700; color: var(--bfc-base-c); }
   .stat-label { color: var(--bfc-base-c); font-size: var(--bf-font-size-l); font-weight: 600; }
@@ -830,8 +1271,27 @@ const SHARED_STYLE = `
   .clickable { cursor: pointer; }
   li.clickable:hover, .top-list li.clickable:hover { text-decoration: underline; }
   circle.clickable:hover { opacity: 0.8; }
+  /* Filterraden vises ikke lenger: filterfeltene ligger skjult i DOM-en og
+     settes fra rullgardinene (pil i overskriften) og fra klikk på diagram/
+     Topp 5, slik at filtrering og graf bruker samme input-events som før. */
+  .filter-row { display: none; }
   .filter-row th { padding-top: var(--bfs8); padding-bottom: var(--bfs8); background: var(--bfc-base-2); }
   .filter-row .bf-input { font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); width: 100%; min-width: 9rem; }
+  .filter-arrow { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 1.75rem; height: 1.75rem; margin-left: var(--bfs4); padding: 0; border: none; background: transparent; color: var(--bfc-base-c); border-radius: var(--bf-radius-s); cursor: pointer; font-size: var(--bf-font-size-s); }
+  .filter-arrow:hover, .filter-arrow[aria-expanded="true"] { color: var(--bfc-base-c); background: var(--bfc-theme-fade); }
+  .filter-arrow.filter-active { color: var(--bfc-theme-c, var(--bfc-base-c)); background: var(--bfc-theme-fade); }
+  .filter-arrow[aria-expanded="true"] i { transform: rotate(180deg); }
+  /* Rullgardinen er position: fixed og legges rett under filterfeltet med
+     nøyaktig kolonnens bredde (satt i skriptet). Samme bakgrunn, ramme,
+     avrunding og skygge som tabellkortet rundt. */
+  .combo-panel { position: fixed; z-index: 60; display: flex; flex-direction: column; background: var(--bfc-base-3); color: var(--bfc-base-c); border: var(--bf-border); border-radius: var(--bf-radius-m); box-shadow: 0 4px 12px var(--bfc-shadow); overflow: hidden; }
+  .combo-search { margin: var(--bfs8); width: calc(100% - 2 * var(--bfs8)); font-size: var(--bf-font-size-s); padding: var(--bfs4) var(--bfs8); }
+  .combo-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; border-top: var(--bf-border); }
+  .combo-option, .combo-empty { padding: var(--bfs8) var(--bfs12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .combo-option { cursor: pointer; }
+  .combo-option:hover, .combo-option.combo-active { background: var(--bfc-theme-fade); }
+  .combo-option.combo-selected { font-weight: 700; }
+  .combo-empty { color: var(--bfc-base-c-dimmed); font-style: italic; }
   /* Row itself navigates to the avvik's detail page (see the .avvik-row
      handler in SHARED_SCRIPT) - hover/focus-visible make that obvious
      without relying on cursor alone. outline-offset is negative since a
@@ -872,6 +1332,9 @@ const SHARED_STYLE = `
   .detail-page-section .bf-card-content { font-size: var(--bf-font-size-m); line-height: 1.6; }
   .external-logo-links { display: flex; gap: var(--bfs16); flex-wrap: wrap; }
   .external-logo-link { display: inline-flex; align-items: center; justify-content: center; width: 3rem; height: 3rem; border-radius: var(--bf-radius-m); border: var(--bf-border); background: var(--bfc-base-2); }
+  .external-logo-link.has-caption { width: auto; gap: var(--bfs8); padding: 0 var(--bfs12) 0 var(--bfs8); }
+  .external-logo-caption { font-size: var(--bf-font-size-s); font-weight: 600; color: var(--bfc-base-c); white-space: nowrap; }
+  .invoice-numbers > div + div { margin-top: var(--bfs4); }
   .external-logo-link:hover { background: var(--bfc-theme-fade); }
   .external-logo-link:focus-visible { outline: 2px solid var(--bfc-theme); outline-offset: 2px; }
   .external-logo-link img { width: 2rem; height: 2rem; object-fit: contain; }
@@ -898,46 +1361,134 @@ const SHARED_STYLE = `
     .procedure-card .bf-card-content { padding: var(--bfs16); }
     .procedure-steps { font-size: var(--bf-font-size-m); }
   }
-  /* One compact card per candidate invoice (see renderOneInvoiceSuggestion) -
-     the border carries strength the same way tone-border-<tone> already
-     does for the info cards/procedure-card (success = sterkt forslag,
-     warning = svakt/manuell). A single flowing comparison, not three
-     separate order/leverandørordre/faktura boxes. font-size is set
-     explicitly to a 14px floor rather than reusing --bf-font-size-s, per the
-     task's "minimum 14px, unngå lys grå tekst" - text here always stays
-     full-contrast (--bfc-base-c), never the dimmed tone used for secondary
-     info elsewhere on this page. */
-  /* Same heading treatment as "Anbefalt fremgangsmåte" (.procedure-section
-     h2 above), so the two section headings read as equally important. */
-  .invoice-suggestions-section h2 { font-size: var(--bf-font-size-h2); margin: 0 0 var(--bfs16); }
-  .suggestions-toggle { display: inline-flex; align-items: center; gap: var(--bfs8); }
-  .invoice-suggestions { display: flex; flex-direction: column; gap: var(--bfs24); margin-top: var(--bfs16); }
-  /* [hidden] alone loses to the class rule above (same specificity, and the
-     author stylesheet comes after the UA one) - this makes the JS toggle's
-     list.hidden actually hide the content, instead of the plain display:flex
-     rule silently overriding it and leaving every suggestion visible
-     regardless of the toggle button's state. */
-  .invoice-suggestions[hidden] { display: none; }
-  @media (max-width: 480px) {
-    .invoice-suggestions-section h2 { font-size: var(--bf-font-size-h3); }
-  }
-  .invoice-suggestion-card { border-width: 2px; border-style: solid; font-size: 14px; color: var(--bfc-base-c); }
-  .suggestion-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bfs12); }
-  .suggestion-invoice-number { font-weight: 700; }
-  .suggestion-subheader { display: flex; align-items: center; gap: var(--bfs8); margin-top: var(--bfs8); }
-  .suggestion-subheader.compare-match { font-weight: 700; }
-  .suggestion-compare { display: flex; flex-direction: column; gap: var(--bfs4); margin-top: var(--bfs16); }
-  .compare-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bfs12); padding: var(--bfs4) 0; border-bottom: var(--bf-border); }
-  .compare-label { flex: 0 0 7rem; color: var(--bfc-base-c); font-weight: 600; }
-  .compare-value { flex: 1 1 10rem; }
-  .compare-row.compare-match .compare-value { font-weight: 700; }
-  .compare-match i, .suggestion-subheader.compare-match i { color: var(--bfc-success); }
-  .compare-mismatch i, .suggestion-subheader.compare-mismatch i { color: var(--bfc-warning); }
-  .suggestion-meta { margin-top: var(--bfs12); color: var(--bfc-base-c); }
-  .suggestion-reason { margin: var(--bfs16) 0 0; line-height: 1.6; }
-  @media (max-width: 480px) {
-    .compare-label { flex-basis: 100%; }
-  }`;
+`;
+
+// Trend chart for "Avvik totalt", shown beside the key figures. The server only
+// embeds one item per avvik (when it started counting, when it was resolved,
+// and the values the filter boxes match against); the browser builds both
+// series with history.js's buildDailySeries, whose source is shipped below so
+// the total and the filtered line can never disagree. Filtering the table adds
+// a second line to this same chart rather than a second chart. A closed avvik
+// has no purchaser or avvikstype in dwh (see avvikSync.js's
+// syncResolvedHistory), so those two filters only see open ones - the note
+// under the chart says so.
+function renderTrendSection(avvikList) {
+  const today = new Date().toISOString().slice(0, 10);
+  const items = buildChartItems(avvikList, today);
+  // "<" inside the JSON would let a value close the script element early.
+  const payload = JSON.stringify({ items, from: CHART_FROM, to: today }).replace(/</g, '\\u003c');
+  const fromLabel = new Date(CHART_FROM).toLocaleDateString('no-NO', { day: 'numeric', month: 'long', year: 'numeric' });
+  return `
+    <section id="trend-section">
+      <div class="bf-card trend-card"><div class="bf-card-content">
+        <div class="trend-head">
+          <span class="trend-title">Avvik over tid (fra ${fromLabel})</span>
+          <span class="trend-legend">
+            <span><span class="legend-line legend-total"></span>Totalt</span>
+            <span id="trend-filter-legend" hidden><span class="legend-line legend-filter"></span><span id="trend-filter-label"></span></span>
+          </span>
+        </div>
+        <div id="trend-chart" class="trend-chart" aria-label="Antall avvik over tid"></div>
+        <div class="trend-note" id="trend-note" hidden>Løste saker har ikke avvikstype i historikken, og noen mangler innkjøper, så filterlinjen kan være for lav bakover i tid.</div>
+      </div></div>
+      <script type="application/json" id="trend-data">${payload}</script>
+    </section>`;
+}
+
+// Plain string concatenation on purpose (no nested template literal): this is
+// a JS-in-a-JS-string, and a stray backtick inside it ends the string early
+// and crashes the app at startup (that already happened once in SHARED_STYLE).
+const TREND_SCRIPT = [
+  '(function () {',
+  '  var buildDailySeries = ' + buildDailySeries.toString() + ';',
+  "  var dataEl = document.getElementById('trend-data');",
+  "  var chart = document.getElementById('trend-chart');",
+  '  if (!dataEl || !chart) return;',
+  '  var payload = JSON.parse(dataEl.textContent);',
+  "  var NS = 'http://www.w3.org/2000/svg';",
+  '  var totalSeries = buildDailySeries(payload.items, payload.from, payload.to);',
+  '  var filteredSeries = null;',
+  '  function el(name, attrs, text) {',
+  '    var node = document.createElementNS(NS, name);',
+  '    Object.keys(attrs || {}).forEach(function (k) { node.setAttribute(k, attrs[k]); });',
+  '    if (text) node.textContent = text;',
+  '    return node;',
+  '  }',
+  '  function draw() {',
+  '    var W = chart.clientWidth, H = chart.clientHeight;',
+  '    if (W < 60 || H < 60) return;',
+  '    var L = 26, R = 8, T = 8, B = 18;',
+  "    chart.textContent = '';",
+  '    var all = filteredSeries ? totalSeries.concat(filteredSeries) : totalSeries;',
+  '    var max = Math.max(1, Math.max.apply(null, all.map(function (p) { return p.count; })));',
+  '    var step = max <= 5 ? 1 : Math.ceil(max / 4);',
+  '    var top = Math.ceil(max / step) * step;',
+  '    var n = totalSeries.length;',
+  '    var x = function (i) { return L + (n <= 1 ? 0 : (i * (W - L - R)) / (n - 1)); };',
+  '    var y = function (v) { return T + (H - T - B) * (1 - v / top); };',
+  "    var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'class': 'trend-svg' });",
+  '    for (var g = 0; g <= top; g += step) {',
+  "      svg.appendChild(el('line', { x1: L, x2: W - R, y1: y(g), y2: y(g), 'class': 'trend-grid' }));",
+  "      svg.appendChild(el('text', { x: L - 5, y: y(g) + 3, 'text-anchor': 'end', 'class': 'trend-label' }, String(g)));",
+  '    }',
+  '    totalSeries.forEach(function (p, i) {',
+  "      if (p.date.slice(8) === '01' || p.date.slice(8) === '15') {",
+  "        svg.appendChild(el('text', { x: x(i), y: H - 4, 'text-anchor': 'middle', 'class': 'trend-label' }, p.date.slice(8) + '.' + p.date.slice(5, 7)));",
+  '      }',
+  '    });',
+  '    function line(series, cls) {',
+  "      var points = series.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p.count).toFixed(1); }).join(' ');",
+  "      svg.appendChild(el('polyline', { points: points, 'class': cls }));",
+  '    }',
+  "    line(totalSeries, 'trend-line');",
+  "    if (filteredSeries) line(filteredSeries, 'trend-line-filter');",
+  '    totalSeries.forEach(function (p, i) {',
+  "      var hit = el('circle', { cx: x(i), cy: y(p.count), r: 4, 'class': 'trend-hit' });",
+  "      var label = p.date + ': ' + p.count + ' avvik';",
+  "      if (filteredSeries) label += ' (filter: ' + filteredSeries[i].count + ')';",
+  "      hit.appendChild(el('title', {}, label));",
+  '      svg.appendChild(hit);',
+  '    });',
+  '    chart.appendChild(svg);',
+  '  }',
+  "  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(draw).observe(chart);",
+  "  window.addEventListener('resize', draw);",
+  '  draw();',
+  "  window.addEventListener('load', draw);",
+  "  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);",
+  '',
+  "  var section = document.getElementById('open-section');",
+  '  if (!section) return;',
+  "  var inputs = section.querySelectorAll('.filter-input');",
+  "  var LABELS = { order: 'ordre', po: 'PO-nummer', purchaser: 'innkjøper', department: 'avdeling', type: 'avvikstype' };",
+  '  function update() {',
+  '    var filters = {};',
+  '    inputs.forEach(function (input) {',
+  '      var v = input.value.trim().toLowerCase();',
+  '      if (v) filters[input.dataset.col] = v;',
+  '    });',
+  '    var cols = Object.keys(filters);',
+  "    document.getElementById('trend-filter-legend').hidden = cols.length === 0;",
+  "    document.getElementById('trend-note').hidden = !(filters.purchaser || filters.type);",
+  '    if (!cols.length) {',
+  '      filteredSeries = null;',
+  '    } else {',
+  '      var subset = payload.items.filter(function (item) {',
+  "        return cols.every(function (c) { return (item[c] || '').indexOf(filters[c]) !== -1; });",
+  '      });',
+  "      document.getElementById('trend-filter-label').textContent =",
+  "        cols.map(function (c) { return LABELS[c] + ' \\u00ab' + filters[c] + '\\u00bb'; }).join(', ');",
+  '      filteredSeries = buildDailySeries(subset, payload.from, payload.to);',
+  '    }',
+  '    draw();',
+  '  }',
+  '  inputs.forEach(function (input) {',
+  "    input.addEventListener('input', update);",
+  "    input.addEventListener('change', update);",
+  '  });',
+  '  update();',
+  '}());',
+].join('\n');
 
 // Runs before the stylesheet/body so a stored preference applies with no
 // flash of the server-rendered default (dark) on load. 'system' stores/adds
@@ -958,7 +1509,40 @@ const THEME_RESTORE_SCRIPT = `
 // do - browsers always fetch fresh content on the next deploy, with no need
 // for anyone to hard-refresh (see the /assets routes in index.js).
 const ASSET_CSS = SHARED_STYLE;
-const ASSET_JS = SHARED_SCRIPT;
+// Hover-forklaring for stolpene på Utvikling-siden: én tooltip som følger
+// musepekeren (og vises ved tastaturfokus). Tekst settes med textContent.
+const BAR_TOOLTIP_SCRIPT = `
+(function () {
+  var rows = document.querySelectorAll('.bar-chart .bar-row');
+  if (!rows.length) return;
+  var tip = document.createElement('div');
+  tip.className = 'chart-tooltip';
+  tip.hidden = true;
+  var strong = document.createElement('strong');
+  var line = document.createElement('span');
+  tip.append(strong, line);
+  document.body.appendChild(tip);
+  function show(row, x, y) {
+    strong.textContent = row.dataset.label;
+    line.textContent = row.dataset.value + ' åpne avvik (' + row.dataset.share + ' % av alle)';
+    tip.hidden = false;
+    var w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - w - 8)) + 'px';
+    tip.style.top = Math.max(8, Math.min(y + 14, window.innerHeight - h - 8)) + 'px';
+  }
+  rows.forEach(function (row) {
+    row.addEventListener('pointermove', function (e) { show(row, e.clientX, e.clientY); });
+    row.addEventListener('pointerleave', function () { tip.hidden = true; });
+    row.addEventListener('focus', function () {
+      var r = row.getBoundingClientRect();
+      show(row, r.left + r.width / 2, r.top);
+    });
+    row.addEventListener('blur', function () { tip.hidden = true; });
+  });
+}());
+`;
+
+const ASSET_JS = SHARED_SCRIPT + '\n' + TREND_SCRIPT + '\n' + BAR_TOOLTIP_SCRIPT;
 const ASSET_CSS_VERSION = crypto.createHash('sha256').update(ASSET_CSS).digest('hex').slice(0, 10);
 const ASSET_JS_VERSION = crypto.createHash('sha256').update(ASSET_JS).digest('hex').slice(0, 10);
 
@@ -1002,7 +1586,7 @@ function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions
 function renderOpenAvvikPage(avvikList, notifications) {
   const { open, resolved } = splitAvvik(avvikList);
   const openRows = open
-    .map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', showSku: true, showDateColumn: false, showNotifiedColumn: false }))
+    .map((a) => renderAvvikRow(a, notifications, { showSku: true, showDateColumn: false, showNotifiedColumn: false, openList: true }))
     .join('');
 
   const content = `
@@ -1013,17 +1597,23 @@ function renderOpenAvvikPage(avvikList, notifications) {
         <h2>Åpne avvik</h2>
         <span class="bf-badge bfc-attn-bg">${open.length}</span>
       </div>
+      <div id="supplier-chip" class="filter-chip" hidden>
+        <span>Leverandør: <strong id="supplier-chip-name"></strong></span>
+        <button type="button" id="supplier-chip-clear" class="icon-button chip-clear" aria-label="Fjern leverandørfilter"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </div>
+      <input type="hidden" class="filter-input" data-col="supplier">
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>SKU</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th></th><th>Kommentarer</th></tr>
+            <tr><th>Ordre</th><th>PO-nummer</th><th>Status</th><th>SKU</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="po" placeholder="Filtrer PO-nummer..."></th>
+              <th></th>
               <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
-              <th></th>
               <th></th>
               <th></th>
             </tr>
@@ -1172,6 +1762,36 @@ function renderInfoCard(label, value, tone = 'neutral', subValue) {
     </div></div>`;
 }
 
+// Fakturaene (og kreditnotaene) som hører til avviket. Eldre lagret tilstand
+// har bare invoiceNumber/mediusLink; da brukes de som én faktura til neste
+// dwh-synk fyller inn hele listen.
+function getAvvikInvoices(avvik) {
+  if (Array.isArray(avvik.invoices) && avvik.invoices.length) return avvik.invoices;
+  return hasValue(avvik.invoiceNumber)
+    ? [{ invoiceNumber: avvik.invoiceNumber, mediusLink: avvik.mediusLink || null, isCreditNote: false }]
+    : [];
+}
+
+// "Fakturanummer"-kortet: ett nummer per linje, lenket til Medius når det
+// finnes en lenke, og kreditnotaer merket som det.
+function renderInvoiceCard(invoices, tone = 'neutral') {
+  if (!invoices.length) return '';
+  const items = invoices
+    .map((inv) => {
+      const text = `${escapeHtml(String(inv.invoiceNumber))}${inv.isCreditNote ? ' (kreditnota)' : ''}`;
+      const label = inv.isCreditNote ? 'kreditnota' : 'faktura';
+      return inv.mediusLink
+        ? `<div><a class="bf-link" href="${escapeHtml(inv.mediusLink)}" target="_blank" rel="noopener noreferrer" title="Vis ${label} ${escapeHtml(String(inv.invoiceNumber))} i Medius">${text}</a></div>`
+        : `<div>${text}</div>`;
+    })
+    .join('');
+  return `
+    <div class="bf-card info-card tone-border-${tone}"><div class="bf-card-content">
+      <div class="stat-label">Fakturanummer</div>
+      <div class="stat-value invoice-numbers">${items}</div>
+    </div></div>`;
+}
+
 // Defensive display-only clamp: avvikSync.js's resolveStockBreakdown logs a
 // warning if resoldQuantity + writtenOffQuantity ever exceeds totalQuantity
 // (duplicate stock_history rows or a bad lot join) without altering the
@@ -1193,127 +1813,6 @@ function renderProcedureSteps(procedure) {
   return `<ul class="procedure-steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`;
 }
 
-// "—" for a missing suggestion field, consistent with hasValue/renderInfoCard
-// above.
-function suggestionValue(value) {
-  return value === null || value === undefined || value === '' ? '—' : escapeHtml(String(value));
-}
-
-// Norwegian-style "571,01" rather than "571.01" - amounts/prices aren't shown
-// anywhere else in this app yet, hence a small local helper rather than
-// reusing something that already existed.
-function formatAmount(value) {
-  if (value === null || value === undefined) return '—';
-  return Number(value).toFixed(2).replace('.', ',');
-}
-
-const SUGGESTION_BADGE = {
-  strong: { tone: 'success', label: 'Sterkt forslag', icon: 'fa-circle-check' },
-  weak: { tone: 'warning', label: 'Svakt forslag – krever manuell sjekk', icon: 'fa-triangle-exclamation' },
-  manual: { tone: 'warning', label: 'Svakt forslag – manuell ordre', icon: 'fa-triangle-exclamation' },
-};
-
-// One side-by-side order-vs-faktura row - bold (and a check icon) when the
-// two values agree, plain weight (and a warning icon) when they don't, per
-// the task's "fet skrift for samsvarende verdier" rule. Both values always
-// render in full-contrast text (never the dimmed --bfc-base-c-dimmed used
-// elsewhere for secondary info), so a mismatch still reads clearly rather
-// than fading out.
-function renderCompareRow(label, orderValue, invoiceValue, matches) {
-  const cls = matches ? 'compare-match' : 'compare-mismatch';
-  const icon = matches ? 'fa-check' : 'fa-triangle-exclamation';
-  return `<div class="compare-row ${cls}">
-    <span class="compare-label">${escapeHtml(label)}</span>
-    <span class="compare-value">Ordre: ${suggestionValue(orderValue)}</span>
-    <span class="compare-value">Faktura: ${suggestionValue(invoiceValue)}</span>
-    <i class="fa-solid ${icon}" aria-hidden="true"></i>
-  </div>`;
-}
-
-// One compact card per candidate invoice (see invoiceSuggestions.js's
-// buildInvoiceSuggestion for where every field here comes from) - a single
-// flowing comparison rather than three separate order/leverandørordre/
-// faktura boxes, per the task's redesign.
-function renderOneInvoiceSuggestion(suggestion) {
-  const badge = SUGGESTION_BADGE[suggestion.strength];
-  const mediusLinkHtml = suggestion.mediusLink
-    ? `<a class="bf-button bf-button-small" href="${escapeHtml(suggestion.mediusLink)}" target="_blank" rel="noopener noreferrer">
-        Åpne i Medius <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
-      </a>`
-    : '';
-
-  const articleCls = suggestion.articleMatches ? 'compare-match' : 'compare-mismatch';
-  const supplierCls = suggestion.supplierMatches ? 'compare-match' : 'compare-mismatch';
-
-  const compareRowsHtml = [
-    renderCompareRow('Antall', suggestion.orderQuantity, suggestion.invoiceQuantity, suggestion.quantityMatches),
-    renderCompareRow('Enhetspris', formatAmount(suggestion.orderUnitPrice), formatAmount(suggestion.invoiceUnitPrice), suggestion.unitPriceMatches),
-    renderCompareRow('Beløp', formatAmount(suggestion.orderAmount), formatAmount(suggestion.invoiceAmount), suggestion.amountMatches),
-    // No reference_id to compare against for a manual order - this row is
-    // simply not applicable there (see invoiceSuggestions.js). Whenever it
-    // does apply, it's always a mismatch by construction: a matching Visma
-    // order means the invoice is already connected and gets excluded before
-    // it ever reaches this page (see buildInvoiceSuggestionsForAvvik).
-    suggestion.referenceVismaOrder
-      ? `<div class="compare-row compare-mismatch">
-          <span class="compare-label">Visma-ordre</span>
-          <span class="compare-value">Fra ordre: ${suggestionValue(suggestion.referenceVismaOrder)}</span>
-          <span class="compare-value">Fra faktura: ${suggestionValue(suggestion.invoiceVismaOrder)}</span>
-          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-        </div>`
-      : '',
-  ].join('');
-
-  // Each part is already escaped (suggestionValue/formatAmount return
-  // pre-escaped/plain-numeric strings) - the joined line must not be
-  // escaped again, or entities like "&amp;" would double-escape.
-  const metaParts = [`Koblingsstatus: ${suggestionValue(suggestion.connectionStatus)}`];
-  if (suggestion.quantityNotConnected) metaParts.push(`Ikke koblet antall: ${suggestionValue(suggestion.quantityNotConnected)}`);
-  if (suggestion.amountNotConnected) metaParts.push(`Ikke koblet beløp: ${formatAmount(suggestion.amountNotConnected)}`);
-
-  return `
-    <div class="bf-card invoice-suggestion-card tone-border-${badge.tone}"><div class="bf-card-content">
-      <div class="suggestion-header">
-        <span class="bf-badge bfc-${badge.tone}-bg"><i class="fa-solid ${badge.icon}" aria-hidden="true"></i> ${escapeHtml(badge.label)}</span>
-        <span class="suggestion-invoice-number">Faktura: ${suggestionValue(suggestion.invoiceNumber)}${suggestion.invoiceTypeLabel ? ` (${suggestionValue(suggestion.invoiceTypeLabel)})` : ''}${suggestion.invoiceCreatedAt ? ` – ${suggestionValue(new Date(suggestion.invoiceCreatedAt).toLocaleDateString('no-NO'))}` : ''}</span>
-        ${mediusLinkHtml}
-      </div>
-      <div class="suggestion-subheader ${articleCls}">
-        <i class="fa-solid ${suggestion.articleMatches ? 'fa-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i>
-        ${suggestionValue(suggestion.articleCode)}${suggestion.articleName ? ` – ${suggestionValue(suggestion.articleName)}` : ''}
-      </div>
-      <div class="suggestion-subheader ${supplierCls}">
-        <i class="fa-solid ${suggestion.supplierMatches ? 'fa-check' : 'fa-triangle-exclamation'}" aria-hidden="true"></i>
-        Leverandør: ${suggestionValue(suggestion.supplierName)}
-      </div>
-      <div class="suggestion-compare">${compareRowsHtml}</div>
-      <div class="suggestion-meta">${metaParts.join(' · ')}</div>
-      <p class="suggestion-reason">${escapeHtml(suggestion.reason)}</p>
-    </div></div>`;
-}
-
-// Hidden entirely when there's nothing to suggest - an empty array means no
-// unconnected invoice-line candidate matched this avvik's order line at all
-// (see avvikSync.js/invoiceSuggestions.js), per the task's "skjul seksjonen
-// helt" rather than an empty section. When there is something to suggest,
-// the card list itself still starts collapsed behind a toggle button (see
-// the SHARED_SCRIPT handler) - a nice-to-have detail, not something that
-// needs to be on screen by default every time. Only one such section ever
-// exists per page load (one avvik per detail page), so a plain id is safe
-// here, unlike the per-row toggles elsewhere on this page.
-function renderInvoiceSuggestions(avvik) {
-  const suggestions = avvik.invoiceSuggestions || [];
-  if (!suggestions.length) return '';
-  return `
-    <section class="detail-page-section invoice-suggestions-section">
-      <h2>Forslag til faktura som må kobles til ordrelinjen</h2>
-      <button type="button" id="invoice-suggestions-toggle" class="bf-button bf-button-small suggestions-toggle" aria-expanded="false" aria-controls="invoice-suggestions-list">
-        <span class="suggestions-toggle-label">Vis forslag</span> <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
-      </button>
-      <div id="invoice-suggestions-list" class="invoice-suggestions" hidden>${suggestions.map(renderOneInvoiceSuggestion).join('')}</div>
-    </section>`;
-}
-
 // Detail page for a single avvik/ordrelinje, reached by clicking its row (or
 // its old "Dette må gjøres"/"Mer informasjon" action) anywhere it appears -
 // open avvik, Finance, or Arkiv. Info cards, the header icon links, and
@@ -1321,6 +1820,7 @@ function renderInvoiceSuggestions(avvik) {
 // placeholder when a value is missing.
 function renderAvvikDetailPage(avvik) {
   const { procedure, links, note } = getAvvikDetailContent(avvik);
+  const invoices = getAvvikInvoices(avvik);
 
   // Every key figure shares the same discrepancyType status color (see
   // typeBadges.js - the same mapping already used for the type badge on the
@@ -1350,16 +1850,27 @@ function renderAvvikDetailPage(avvik) {
       avvikTone,
       avvik.writtenOffStatus ? formatQuantityOfTotal(avvik.writtenOffQuantity, avvik.totalQuantity) : null
     ),
-    renderInfoCard('Fakturanummer', avvik.invoiceNumber, avvikTone),
+    renderInvoiceCard(invoices, avvikTone),
   ]
     .filter(Boolean)
     .join('');
 
-  const mediusLinkHtml = avvik.mediusLink
-    ? `<a class="external-logo-link" href="${escapeHtml(avvik.mediusLink)}" target="_blank" rel="noopener noreferrer" title="Vis faktura i Medius" aria-label="Vis faktura i Medius">
-        <img src="/assets/medius-logo.png" alt="" width="32" height="32">
-      </a>`
-    : '';
+  // Ett Medius-ikon per faktura/kreditnota med lenke. Når det er flere, står
+  // fakturanummeret ved siden av ikonet så de kan skilles fra hverandre.
+  const linkedInvoices = invoices.filter((inv) => inv.mediusLink);
+  const mediusLinkHtml = linkedInvoices
+    .map((inv) => {
+      const what = inv.isCreditNote ? 'kreditnota' : 'faktura';
+      const title = linkedInvoices.length > 1 ? `Vis ${what} ${inv.invoiceNumber} i Medius` : `Vis ${what} i Medius`;
+      const caption =
+        linkedInvoices.length > 1
+          ? `<span class="external-logo-caption">${escapeHtml(String(inv.invoiceNumber))}${inv.isCreditNote ? ' (kreditnota)' : ''}</span>`
+          : '';
+      return `<a class="external-logo-link${caption ? ' has-caption' : ''}" href="${escapeHtml(inv.mediusLink)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+        <img src="/assets/medius-logo.png" alt="" width="32" height="32">${caption}
+      </a>`;
+    })
+    .join('');
   const ticketUrlHtml = avvik.ticketUrl
     ? `<a class="external-logo-link" href="${escapeHtml(avvik.ticketUrl)}" target="_blank" rel="noopener noreferrer" title="Vis saken i Ticket Manager" aria-label="Vis saken i Ticket Manager">
         <img src="/assets/ticket-manager-logo.png" alt="" width="32" height="32">
@@ -1404,7 +1915,12 @@ function renderAvvikDetailPage(avvik) {
       </div></div>
     </section>` : ''}
 
-    ${renderInvoiceSuggestions(avvik)}`;
+    <section class="detail-page-section comments-section">
+      <h2>Kommentarer og vedlegg</h2>
+      <div class="bf-card"><div class="bf-card-content">
+        <ul class="comments">${renderComments(avvik.comments || [], avvik.id)}</ul>
+      </div></div>
+    </section>`;
 
   const pageTitle = `${avvik.purchaserName || 'Ukjent sakseier'} – Avvik – ${avvik.orderId}`;
   // "Mer informasjon" (Finance-section cases) should light up "Saker som
@@ -1419,7 +1935,7 @@ function renderArchivePage(avvikList, notifications) {
   // showNotifiedColumn: false drops "Varsling på e-post" - resolved avvik
   // are no longer notified, and the column isn't relevant in the archive.
   const resolvedRows = resolved
-    .map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt', showNotifiedColumn: false }))
+    .map((a) => renderAvvikRow(a, notifications, { actionButton: 'reopen', dateField: 'resolvedAt', showNotifiedColumn: false, editableType: true, commentButton: true }))
     .join('');
 
   const content = `
@@ -1435,10 +1951,11 @@ function renderArchivePage(avvikList, notifications) {
         <h2>Arkiv — løste avvik</h2>
         <span class="bf-badge bfc-theme-bg">${resolved.length}</span>
       </div>
+      <p class="section-note">DWH kan ikke gjenskape avvikstypen for saker som er lukket (prosjektnummer kan være endret, ordrehodet er borte). Bruk «Endre» ved avvikstypen for å sette den selv. Den står til DWH selv klarer å finne typen, og blir da byttet ut automatisk.</p>
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Løst</th><th></th><th>Kommentarer</th></tr>
+            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak til løst</th><th>Løst</th><th></th><th>Kommentarer</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
@@ -1458,7 +1975,74 @@ function renderArchivePage(avvikList, notifications) {
   return renderShell('archive', 'Arkiv', content);
 }
 
+const SUPPLIER_BARS = 15;
+
+// Åpne avvik fordelt på leverandør, størst først. De SUPPLIER_BARS største
+// får hver sin stolpe, resten slås sammen til "Andre"; tabellvisningen under
+// har alle leverandørene. Én serie, så ingen legende - tittelen sier hva
+// stolpene viser, og verdien står ved stolpespissen.
+function renderSupplierChart(openList) {
+  const counts = new Map();
+  for (const a of openList) {
+    const name = supplierLabel(a);
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0], 'no'));
+  const bars = sorted.slice(0, SUPPLIER_BARS);
+  const rest = sorted.slice(SUPPLIER_BARS);
+  // "Andre" er flere leverandører og kan ikke filtreres som én, så den stolpen
+  // er ikke en lenke.
+  if (rest.length) bars.push([`Andre (${rest.length} leverandører)`, rest.reduce((sum, [, c]) => sum + c, 0), false]);
+  const total = openList.length;
+  const max = Math.max(1, ...bars.map(([, c]) => c));
+
+  const rows = bars
+    .map(([name, count, linkable = true]) => {
+      const pct = (count / max) * 100;
+      const share = total ? Math.round((count / total) * 100) : 0;
+      const attrs = `class="bar-row${linkable ? ' bar-row-link' : ''}" data-label="${escapeHtml(name)}" data-value="${count}" data-share="${share}"`;
+      const inner = `
+        <span class="bar-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        <span class="bar-track"><span class="bar-fill" style="width:${pct.toFixed(2)}%"></span><span class="bar-value" style="left:${pct.toFixed(2)}%">${count}</span></span>`;
+      // Stolpen er en lenke til Åpne avvik filtrert på leverandøren.
+      return linkable
+        ? `<li><a ${attrs} href="/?leverandor=${encodeURIComponent(name)}" aria-label="${escapeHtml(name)}: ${count} åpne avvik, vis dem">${inner}</a></li>`
+        : `<li><div ${attrs} tabindex="0">${inner}</div></li>`;
+    })
+    .join('');
+  const tableRows = sorted
+    .map(([name, count]) => `<tr><td>${escapeHtml(name)}</td><td>${count}</td></tr>`)
+    .join('');
+
+  return `
+    <section id="supplier-section">
+      <div class="bf-card supplier-card"><div class="bf-card-content">
+        <span class="trend-title">Åpne avvik per leverandør</span>
+        <p class="chart-sub">${total} åpne avvik fordelt på ${sorted.length} leverandører${rest.length ? ` (de ${SUPPLIER_BARS} største vises, resten samlet under «Andre»)` : ''}.</p>
+        ${total ? `<ul class="bar-list bar-chart" aria-label="Antall åpne avvik per leverandør">${rows}</ul>` : '<p class="chart-sub">Ingen åpne avvik.</p>'}
+        <details class="chart-table">
+          <summary class="bf-link">Vis som tabell</summary>
+          <table class="bf-table">
+            <thead><tr><th>Leverandør</th><th>Antall avvik</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </details>
+      </div></div>
+    </section>`;
+}
+
+function renderUtviklingPage(avvikList) {
+  const { open, resolved } = splitAvvik(avvikList);
+  const content = `
+    <div class="utvikling-page">
+      <div class="utvikling-trend">${renderTrendSection([...open, ...resolved])}</div>
+      ${renderSupplierChart(open)}
+    </div>`;
+  return renderShell('utvikling', 'Utvikling', content);
+}
+
 module.exports = {
+  renderUtviklingPage,
   renderOpenAvvikPage,
   renderFinancePage,
   renderArchivePage,

@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const dwhQueries = require('./dwhQueries');
 const { mapDeviationScenario } = require('./scenario');
+const { INTERNBESTILLING, MANUELL_ORDRE, UNKNOWN_HISTORY_TYPE } = require('./discrepancyTypes');
 const { normalizeFullNameForMatching, resolvePurchaserEmail } = require('./purchaser');
 const {
   buildOrderLineKey,
@@ -68,6 +69,48 @@ function pickBestMediusInvoice(candidates) {
     const candidateKey = String(candidate.document_id ?? candidate.invoice_number);
     return candidateKey > bestKey ? candidate : best;
   }, null);
+}
+
+// Every invoice head that matched one avvik's key, not just the single best
+// one: a PO can carry both the invoice and a credit note against it (e.g. PO
+// 148621: 8281805845 and the credit note 8284689594, same supplier and
+// article), and showing only one of them hid the other. Deduped per
+// invoice_number (the same invoice can match through several lines), an
+// Invalidated head is dropped as soon as a live one exists, and a negative
+// amount marks a credit note. Ordered so a regular invoice comes before a
+// credit note - the first entry is what invoiceNumber/mediusLink show on
+// their own - then by status priority and the same deterministic tiebreak as
+// pickBestMediusInvoice.
+function collectMediusInvoices(candidates) {
+  const byNumber = new Map();
+  for (const candidate of candidates) {
+    const key = String(candidate.invoice_number ?? '').trim();
+    if (!byNumber.has(key)) byNumber.set(key, []);
+    byNumber.get(key).push(candidate);
+  }
+  let heads = [...byNumber.values()].map(pickBestMediusInvoice);
+  if (heads.some((h) => h.processing_status !== 'Invalidated')) {
+    heads = heads.filter((h) => h.processing_status !== 'Invalidated');
+  }
+  const isCredit = (h) => Number(h.amount) < 0;
+  heads.sort((a, b) => {
+    if (isCredit(a) !== isCredit(b)) return isCredit(a) ? 1 : -1;
+    const priority = mediusInvoicePriority(a.processing_status) - mediusInvoicePriority(b.processing_status);
+    if (priority !== 0) return priority;
+    const aKey = String(a.document_id ?? a.invoice_number);
+    const bKey = String(b.document_id ?? b.invoice_number);
+    return aKey < bKey ? 1 : aKey > bKey ? -1 : 0;
+  });
+  return heads.map((h) => ({
+    invoiceNumber: h.invoice_number,
+    mediusLink: h.medius_link,
+    isCreditNote: isCredit(h),
+  }));
+}
+
+function buildMediusInfo(candidates) {
+  const invoices = collectMediusInvoices(candidates);
+  return { invoiceNumber: invoices[0].invoiceNumber, mediusLink: invoices[0].mediusLink, invoices };
 }
 
 // medius_order_deviations.purchase_order is the bestillingsnummer
@@ -161,13 +204,21 @@ async function syncAvvikFromDwh() {
   const rows = await dwhQueries.fetchAvvikRows();
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
   const departments = await dwhQueries.fetchDepartments();
-  const mediusLinks = await dwhQueries.fetchMediusLinks();
-  const mediusCostInvoiceLinks = await dwhQueries.fetchMediusCostInvoiceLinks();
-  const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot();
-  const orderDeviations = await dwhQueries.fetchOrderDeviations();
-  const mediusOrderLines = await dwhQueries.fetchMediusOrderLines();
-  const unconnectedInvoiceLines = await dwhQueries.fetchUnconnectedInvoiceLines();
-  const mediusInvoiceHeadRows = await dwhQueries.fetchMediusInvoiceHeadByNumber();
+  // Every lookup below is narrowed in SQL to the keys of the avvik just
+  // fetched (a few dozen) - reading the Medius tables whole (500k+ rows) filled
+  // Node's heap. See dwhQueries.js's keyList.
+  const poNumbers = rows.map((r) => r.po_number);
+  const orderNumbers = rows.map((r) => r.supplier_order_number);
+  const mediusLinks = await dwhQueries.fetchMediusLinks(poNumbers);
+  const mediusCostInvoiceLinks = await dwhQueries.fetchMediusCostInvoiceLinks(poNumbers);
+  const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot(rows.map((r) => r.lot_number));
+  const orderDeviations = await dwhQueries.fetchOrderDeviations(orderNumbers);
+  const mediusOrderLines = await dwhQueries.fetchMediusOrderLines(orderNumbers);
+  const unconnectedInvoiceLines = await dwhQueries.fetchUnconnectedInvoiceLines(rows.map((r) => r.article_number));
+  // Only invoices that came back as suggestion candidates need a head row.
+  const mediusInvoiceHeadRows = await dwhQueries.fetchMediusInvoiceHeadByNumber(
+    unconnectedInvoiceLines.map((l) => l.invoice_number)
+  );
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
@@ -188,10 +239,7 @@ async function syncAvvikFromDwh() {
     mediusCandidatesByKey.get(key).push(m);
   }
   const mediusInfoByKey = new Map(
-    [...mediusCandidatesByKey.entries()].map(([key, candidates]) => {
-      const best = pickBestMediusInvoice(candidates);
-      return [key, { invoiceNumber: best.invoice_number, mediusLink: best.medius_link }];
-    })
+    [...mediusCandidatesByKey.entries()].map(([key, candidates]) => [key, buildMediusInfo(candidates)])
   );
   // Kostnadsfaktura fallback: no article to key on, only PO+supplier (see
   // dwhQueries.js's fetchMediusCostInvoiceLinks and buildMediusCostLinkKey
@@ -204,10 +252,7 @@ async function syncAvvikFromDwh() {
     mediusCostCandidatesByKey.get(key).push(m);
   }
   const mediusCostInfoByKey = new Map(
-    [...mediusCostCandidatesByKey.entries()].map(([key, candidates]) => {
-      const best = pickBestMediusInvoice(candidates);
-      return [key, { invoiceNumber: best.invoice_number, mediusLink: best.medius_link }];
-    })
+    [...mediusCostCandidatesByKey.entries()].map(([key, candidates]) => [key, buildMediusInfo(candidates)])
   );
   const stockBreakdownByLot = new Map(
     stockMovementByLot.map((s) => [
@@ -321,8 +366,12 @@ async function syncAvvikFromDwh() {
       discrepancyType,
       createdAt: toIso(row.order_date),
       daysWaiting: row.days_waiting,
+      receivedAt: toIso(row.earliest_receipt_at),
       invoiceNumber: mediusInfo ? mediusInfo.invoiceNumber : null,
       mediusLink: mediusInfo ? mediusInfo.mediusLink : null,
+      // Every invoice/credit note matched to the order line (see
+      // collectMediusInvoices) - invoiceNumber/mediusLink above is the first.
+      invoices: mediusInfo ? mediusInfo.invoices : [],
       totalQuantity: stockBreakdown.totalQuantity,
       resoldQuantity: stockBreakdown.resoldQuantity,
       writtenOffQuantity: stockBreakdown.writtenOffQuantity,
@@ -345,6 +394,80 @@ async function syncAvvikFromDwh() {
   return avvikRows;
 }
 
+// Label for history rows: dwh keeps no scenario for a line that already left
+// supplier_order_line, so the type of a closed avvik is not recoverable.
+// What type a closed avvik gets, from the only two facts dwh still keeps on a
+// closed line (same rules and order as fetchAvvikRows' classification):
+//   1. project_number = 14000 -> Internbestilling
+//   2. a supplier_order head whose our_ref is neither empty nor "Intility
+//      Webshop" (manual_order_owner, see fetchResolvedHistory) -> Manuell ordre
+// Anything else stays unknown: the scenarios that depend on live invoice
+// matching can't be recomputed once the line has left supplier_order_line.
+// Note that a project changed afterwards (e.g. 14000 corrected to 11246 for
+// the accounting) is no longer visible in dwh at all.
+function classifyResolvedType(row) {
+  if (row.project_number === 14000) return INTERNBESTILLING;
+  if (row.manual_order_owner) return MANUELL_ORDRE;
+  return UNKNOWN_HISTORY_TYPE;
+}
+
+function daysBetween(fromIso, toIso) {
+  return Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 86400000);
+}
+
+/**
+ * Closed avvik read back from supplier_order_line_copy (see dwhQueries.js's
+ * fetchResolvedHistory), shaped like syncAvvikFromDwh's rows plus the
+ * resolved fields. Ids use the same hash as buildSyntheticId, so a line keeps
+ * its id when it moves from supplier_order_line to the copy table.
+ * @returns {Promise<object[]>} rows for store.mergeHistoryFromDwh
+ */
+async function syncResolvedHistory() {
+  const rows = await dwhQueries.fetchResolvedHistory();
+  const intilityUsers = await dwhQueries.fetchIntilityUsers();
+  const departments = await dwhQueries.fetchDepartments();
+  const emailByFullName = new Map(
+    intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
+  );
+  const departmentByFullName = new Map(
+    intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.department])
+  );
+  const departmentNameByNumber = new Map(departments.map((d) => [d.department_number, d.department_name]));
+  return rows.map((row) => {
+    const receivedAt = toIso(row.earliest_receipt_at);
+    const resolvedAt = toIso(row.archived_at);
+    // Same order as syncAvvikFromDwh: the resolved sakseier's own department
+    // first, department_number (0 on most closed lines) only as a fallback.
+    // The owner comes from the same ticket-per-PO ranking as for open avvik
+    // (dwhQueries.js's TICKET_CTES), so it is null when no ticket names the PO.
+    const discrepancyType = classifyResolvedType(row);
+    // A manual order's owner is its our_ref (as for open avvik), used when no
+    // ticket names the PO.
+    const purchaserName = row.case_owner || (discrepancyType === MANUELL_ORDRE ? row.manual_order_owner : null) || null;
+    const department =
+      (purchaserName && departmentByFullName.get(normalizeFullNameForMatching(purchaserName))) ||
+      departmentNameByNumber.get(row.department_number) ||
+      null;
+    return {
+      id: buildSyntheticId(row),
+      orderId: String(row.supplier_order_number),
+      articleNumber: row.article_number,
+      poNumber: row.po_number,
+      lotNumber: row.lot_number === null || row.lot_number === undefined ? null : String(row.lot_number),
+      department,
+      purchaserName,
+      purchaserEmail: resolvePurchaserEmail(purchaserName, emailByFullName),
+      ticketUrl: row.ticket_url || null,
+      projectNumber: row.project_number === 0 ? null : row.project_number ?? null,
+      discrepancyType,
+      createdAt: toIso(row.order_date),
+      receivedAt,
+      resolvedAt,
+      daysWaiting: daysBetween(receivedAt, resolvedAt),
+    };
+  });
+}
+
 // Used by index.js's manual-purchaser endpoint: when someone types in a real
 // sakseier name for a "Sakseier ikke funnet" case, look up that person's own
 // department the same way the sync above does, so department improves along
@@ -360,11 +483,15 @@ async function resolveDepartmentForPurchaser(name) {
 
 module.exports = {
   syncAvvikFromDwh,
+  syncResolvedHistory,
+  UNKNOWN_HISTORY_TYPE,
+  classifyResolvedType,
   resolveDepartmentForPurchaser,
   resolveStockBreakdown,
   resolveResoldStatus,
   resolveWrittenOffStatus,
   pickBestMediusInvoice,
+  collectMediusInvoices,
   buildMediusLinkKey,
   buildMediusCostLinkKey,
 };

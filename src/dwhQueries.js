@@ -36,292 +36,12 @@ async function withPool(run) {
   }
 }
 
-// The single ground-truth query (supplied directly by the user) that does
-// everything the old dwhQueries.js/scenario.js/purchaser.js/avvikSync.js
-// pipeline was reimplementing in JS: PO-nummer derivation, the >21-days-
-// waiting filter (computed from order_date directly, not stock_history),
-// manual-vs-PO-order detection (employee_number > 11), software detection
-// (main_group_number = 6), internal-order detection (project_number IN
-// (11246, 14000)), Medius cost/goods invoice matching (direct, via PO+article,
-// and via the connection bridge), a 7-tier ticket-ranking for sakseier
-// resolution, and the final deviation_scenario classification - all in one
-// query against dwh. See scenario.js's mapDeviationScenario for how its
-// output maps onto this app's discrepancyTypes.js constants.
-//
-// Only the columns avvikSync.js actually consumes are projected in the final
-// SELECT; every join/CTE above it is preserved exactly as given.
-async function fetchAvvikRows() {
-  return withPool(async (pool, sql) => {
-    const result = await pool
-      .request()
-      .input('mainCutoff', sql.Date, MAIN_TABLE_CUTOFF_DATE)
-      .input('ticketsCutoff', sql.Date, TICKETS_CUTOFF_DATE)
-      .query(`
-        WITH EarliestReceiptByOrderArticle AS
-        (
-            /* "Mottak" = en lagerbevegelse med positiv quantity, for samme
-            bestillingsnummer (order_number) og artikkelnummer (article_number)
-            som ordrelinjen. Dager siden mottak regnes fra den TIDLIGSTE slike
-            bevegelsen (samme logikk som den opprinnelige "Dager ventende"-
-            målingen: MIN(dato) WHERE Antall > 0). En ordrelinje uten noen
-            match her er ikke mottatt ennå, og skal dermed ikke telles/vises. */
-            SELECT
-                sh.order_number COLLATE Danish_Norwegian_CI_AS AS order_number,
-                sh.article_number COLLATE Danish_Norwegian_CI_AS AS article_number,
-                MIN(sh.date_of_movement) AS earliest_receipt_at
-            FROM [dwh].[workplace].[stock_history] AS sh
-            WHERE sh.quantity > 0
-            GROUP BY
-                sh.order_number COLLATE Danish_Norwegian_CI_AS,
-                sh.article_number COLLATE Danish_Norwegian_CI_AS
-        ),
-
-        SupplierOrderLines AS
-        (
-            SELECT
-                sol.*,
-
-                /* PO-nummer = delen før første bindestrek */
-                NULLIF(
-                    LTRIM(RTRIM(
-                        CASE
-                            WHEN CHARINDEX('-', sol.reference_id) > 0
-                                THEN LEFT(
-                                    sol.reference_id,
-                                    CHARINDEX('-', sol.reference_id) - 1
-                                )
-                            ELSE sol.reference_id
-                        END
-                    )),
-                    ''
-                ) COLLATE Danish_Norwegian_CI_AS AS po_number,
-
-                CONVERT(varchar(50), sol.supplier_number)
-                    COLLATE Danish_Norwegian_CI_AS AS supplier_id_text,
-
-                DATEDIFF(
-                    DAY,
-                    CAST(er.earliest_receipt_at AS date),
-                    CAST(GETDATE() AS date)
-                ) AS days_waiting
-
-            FROM [dwh].[finance].[supplier_order_line] AS sol
-
-            INNER JOIN EarliestReceiptByOrderArticle AS er
-                ON er.order_number
-                 = sol.supplier_order_number COLLATE Danish_Norwegian_CI_AS
-               AND er.article_number
-                 = sol.article_number COLLATE Danish_Norwegian_CI_AS
-
-            WHERE sol.order_status = 3030
-              AND sol.order_date >= @mainCutoff
-              AND DATEDIFF(
-                      DAY,
-                      CAST(er.earliest_receipt_at AS date),
-                      CAST(GETDATE() AS date)
-                  ) > 21
-        ),
-
-        /*
-        For manuelle ordre brukes our_ref når:
-        - employee_number > 11
-        - our_ref ikke er tom
-        - our_ref ikke er Intility Webshop
-        */
-        SupplierOrders AS
-        (
-            SELECT
-                so.supplier_order_number
-                    COLLATE Danish_Norwegian_CI_AS AS supplier_order_number,
-
-                MAX(
-                    CASE
-                        WHEN NULLIF(LTRIM(RTRIM(so.our_ref)), '') IS NOT NULL
-                         AND LTRIM(RTRIM(so.our_ref))
-                                COLLATE Danish_Norwegian_CI_AS
-                             <> 'Intility Webshop'
-                                COLLATE Danish_Norwegian_CI_AS
-                            THEN LTRIM(RTRIM(so.our_ref))
-                                 COLLATE Danish_Norwegian_CI_AS
-                    END
-                ) AS manual_order_owner
-
-            FROM [dwh].[finance].[supplier_order] AS so
-
-            GROUP BY
-                so.supplier_order_number
-                    COLLATE Danish_Norwegian_CI_AS
-        ),
-
-        /*
-        Medius-fakturaer som matcher på:
-        - PO-nummer
-        - leverandørnummer
-        - artikkelnummer
-        */
-        MediusArticleMatches AS
-        (
-            SELECT
-                ih.visma_purchase_order
-                    COLLATE Danish_Norwegian_CI_AS AS po_number,
-
-                ih.supplier_id
-                    COLLATE Danish_Norwegian_CI_AS AS supplier_id,
-
-                il.article_code
-                    COLLATE Danish_Norwegian_CI_AS AS article_code,
-
-                COUNT_BIG(*) AS matching_invoice_line_count,
-
-                MAX(
-                    CASE
-                        WHEN ih.invoice_type = 'Non-PO invoice'
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_cost_invoice_via_po,
-
-                MAX(
-                    CASE
-                        WHEN ih.processing_status = 'Archived'
-                         AND ih.invoice_type = 'Non-PO invoice'
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_cost_archived_via_po,
-
-                MAX(
-                    CASE
-                        WHEN ih.processing_status = 'Archived'
-                         AND
-                         (
-                             ih.invoice_type <> 'Non-PO invoice'
-                             OR ih.invoice_type IS NULL
-                         )
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_goods_archived_via_po,
-
-                MAX(
-                    CASE
-                        WHEN ih.processing_status = 'Invalidated'
-                         AND
-                         (
-                             ih.invoice_type <> 'Non-PO invoice'
-                             OR ih.invoice_type IS NULL
-                         )
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_goods_invalidated_via_po,
-
-                MAX(
-                    CASE
-                        WHEN ih.processing_status = 'Open'
-                         AND
-                         (
-                             ih.invoice_type <> 'Non-PO invoice'
-                             OR ih.invoice_type IS NULL
-                         )
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_goods_open_via_po
-
-            FROM [dwh].[finance].[medius_invoice_head] AS ih
-
-            INNER JOIN [dwh].[finance].[medius_invoice_lines] AS il
-                ON il.document_id COLLATE Danish_Norwegian_CI_AS
-                 = ih.document_id COLLATE Danish_Norwegian_CI_AS
-
-            WHERE ih.visma_purchase_order IS NOT NULL
-
-            GROUP BY
-                ih.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
-                ih.supplier_id COLLATE Danish_Norwegian_CI_AS,
-                il.article_code COLLATE Danish_Norwegian_CI_AS
-        ),
-
-        /* Kostnadsfaktura direkte på PO-nummer */
-        MediusDirectCostInvoices AS
-        (
-            SELECT
-                ih.visma_purchase_order
-                    COLLATE Danish_Norwegian_CI_AS AS po_number,
-
-                ih.supplier_id
-                    COLLATE Danish_Norwegian_CI_AS AS supplier_id,
-
-                MAX(
-                    CASE
-                        WHEN ih.invoice_type = 'Non-PO invoice'
-                         AND ih.processing_status = 'Archived'
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_cost_archived_directly,
-
-                MAX(
-                    CASE
-                        WHEN ih.invoice_type = 'Non-PO invoice'
-                         AND ih.processing_status = 'Open'
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_cost_open_directly
-
-            FROM [dwh].[finance].[medius_invoice_head] AS ih
-            WHERE ih.visma_purchase_order IS NOT NULL
-
-            GROUP BY
-                ih.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
-                ih.supplier_id COLLATE Danish_Norwegian_CI_AS
-        ),
-
-        /* Medius-koblinger via bestillingsnummer */
-        MediusConnectionMatches AS
-        (
-            SELECT
-                moc.visma_purchase_order
-                    COLLATE Danish_Norwegian_CI_AS AS po_number,
-
-                ih.supplier_id
-                    COLLATE Danish_Norwegian_CI_AS AS supplier_id,
-
-                COUNT_BIG(*) AS connection_count,
-
-                MAX(
-                    CASE
-                        WHEN ih.invoice_type = 'Non-PO invoice'
-                         AND ih.processing_status = 'Archived'
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_cost_archived_via_order_number,
-
-                MAX(
-                    CASE
-                        WHEN ih.invoice_type = 'Non-PO invoice'
-                         AND ih.processing_status = 'Open'
-                            THEN 1
-                        ELSE 0
-                    END
-                ) AS is_cost_open_via_order_number
-
-            FROM [dwh].[finance].[medius_order_connections] AS moc
-
-            INNER JOIN [dwh].[finance].[medius_invoice_head] AS ih
-                ON ih.document_id COLLATE Danish_Norwegian_CI_AS
-                 = moc.document_id COLLATE Danish_Norwegian_CI_AS
-
-            WHERE moc.visma_purchase_order IS NOT NULL
-
-            GROUP BY
-                moc.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
-                ih.supplier_id COLLATE Danish_Norwegian_CI_AS
-        ),
-
+// Ticket -> sakseier resolution, shared by fetchAvvikRows and
+// fetchResolvedHistory so an open and a closed avvik on the same PO resolve to
+// the same owner. Defines TicketSource .. PreferredTicket (one prioritized
+// ticket per PO number); needs @ticketsCutoff. Ends with a comma, so more
+// CTEs can follow it in a WITH list.
+const TICKET_CTES = `
         /*
         Avgrenser ticketstabellen tidlig.
 
@@ -714,6 +434,327 @@ async function fetchAvvikRows() {
             WHERE rt.ticket_rank = 1
         ),
 
+`;
+
+// The lookup queries below used to read whole tables (medius_invoice_lines is
+// ~300k rows, fetchMediusLinks' join ~520k) to find matches for the ~80 avvik
+// a sync actually has - every result set was then held in memory at once and
+// filled Node's 512 MB heap ("JavaScript heap out of memory", ~60 s after
+// startup). Each one now takes the keys of the avvik it is matched against
+// and filters in SQL. keys === undefined keeps the old unfiltered read; an
+// empty list returns nothing without a round trip.
+function keyList(keys) {
+  const unique = new Set(keys.filter((k) => k !== null && k !== undefined && k !== '').map((k) => String(k).trim()));
+  return JSON.stringify([...unique]);
+}
+
+function keyFilter(column, keys) {
+  if (keys === undefined) return '1 = 1';
+  // Trimmed on both sides: avvikSync.js matches these values trimmed and
+  // case-insensitively, so stray whitespace must not hide a match here.
+  return `LTRIM(RTRIM(${column})) COLLATE Danish_Norwegian_CI_AS IN (SELECT LTRIM(RTRIM(j.[value])) COLLATE Danish_Norwegian_CI_AS FROM OPENJSON(@keys) AS j)`;
+}
+
+function withKeys(request, sql, keys) {
+  return keys === undefined ? request : request.input('keys', sql.NVarChar(sql.MAX), keyList(keys));
+}
+
+function hasNoKeys(keys) {
+  return keys !== undefined && keys.length === 0;
+}
+
+// The single ground-truth query (supplied directly by the user) that does
+// everything the old dwhQueries.js/scenario.js/purchaser.js/avvikSync.js
+// pipeline was reimplementing in JS: PO-nummer derivation, the >21-days-
+// waiting filter (computed from order_date directly, not stock_history),
+// manual-vs-PO-order detection (employee_number > 11), software detection
+// (main_group_number = 6), internal-order detection (project_number IN
+// (11246, 14000)), Medius cost/goods invoice matching (direct, via PO+article,
+// and via the connection bridge), a 7-tier ticket-ranking for sakseier
+// resolution, and the final deviation_scenario classification - all in one
+// query against dwh. See scenario.js's mapDeviationScenario for how its
+// output maps onto this app's discrepancyTypes.js constants.
+//
+// Only the columns avvikSync.js actually consumes are projected in the final
+// SELECT; every join/CTE above it is preserved exactly as given.
+async function fetchAvvikRows() {
+  return withPool(async (pool, sql) => {
+    const result = await pool
+      .request()
+      .input('mainCutoff', sql.Date, MAIN_TABLE_CUTOFF_DATE)
+      .input('ticketsCutoff', sql.Date, TICKETS_CUTOFF_DATE)
+      .query(`
+        WITH EarliestReceiptByOrderArticle AS
+        (
+            /* "Mottak" = en lagerbevegelse med positiv quantity, for samme
+            bestillingsnummer (order_number) og artikkelnummer (article_number)
+            som ordrelinjen. Dager siden mottak regnes fra den TIDLIGSTE slike
+            bevegelsen (samme logikk som den opprinnelige "Dager ventende"-
+            målingen: MIN(dato) WHERE Antall > 0). En ordrelinje uten noen
+            match her er ikke mottatt ennå, og skal dermed ikke telles/vises. */
+            SELECT
+                sh.order_number COLLATE Danish_Norwegian_CI_AS AS order_number,
+                sh.article_number COLLATE Danish_Norwegian_CI_AS AS article_number,
+                MIN(sh.date_of_movement) AS earliest_receipt_at
+            FROM [dwh].[workplace].[stock_history] AS sh
+            WHERE sh.quantity > 0
+            GROUP BY
+                sh.order_number COLLATE Danish_Norwegian_CI_AS,
+                sh.article_number COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        SupplierOrderLines AS
+        (
+            SELECT
+                sol.*,
+
+                /* PO-nummer = delen før første bindestrek */
+                NULLIF(
+                    LTRIM(RTRIM(
+                        CASE
+                            WHEN CHARINDEX('-', sol.reference_id) > 0
+                                THEN LEFT(
+                                    sol.reference_id,
+                                    CHARINDEX('-', sol.reference_id) - 1
+                                )
+                            ELSE sol.reference_id
+                        END
+                    )),
+                    ''
+                ) COLLATE Danish_Norwegian_CI_AS AS po_number,
+
+                CONVERT(varchar(50), sol.supplier_number)
+                    COLLATE Danish_Norwegian_CI_AS AS supplier_id_text,
+
+                DATEDIFF(
+                    DAY,
+                    CAST(er.earliest_receipt_at AS date),
+                    CAST(GETDATE() AS date)
+                ) AS days_waiting,
+
+                /* Selve mottaksdatoen (days_waiting er relativt til "nå"):
+                trendgrafen trenger den for å telle hvilke dager en sak var
+                åpen. Samme minste mottaksdato som over. */
+                CAST(er.earliest_receipt_at AS date) AS earliest_receipt_at
+
+            FROM [dwh].[finance].[supplier_order_line] AS sol
+
+            INNER JOIN EarliestReceiptByOrderArticle AS er
+                ON er.order_number
+                 = sol.supplier_order_number COLLATE Danish_Norwegian_CI_AS
+               AND er.article_number
+                 = sol.article_number COLLATE Danish_Norwegian_CI_AS
+
+            WHERE sol.order_status = 3030
+              AND sol.order_date >= @mainCutoff
+              AND DATEDIFF(
+                      DAY,
+                      CAST(er.earliest_receipt_at AS date),
+                      CAST(GETDATE() AS date)
+                  ) > 21
+        ),
+
+        /*
+        For manuelle ordre brukes our_ref når:
+        - employee_number > 11
+        - our_ref ikke er tom
+        - our_ref ikke er Intility Webshop
+        */
+        SupplierOrders AS
+        (
+            SELECT
+                so.supplier_order_number
+                    COLLATE Danish_Norwegian_CI_AS AS supplier_order_number,
+
+                MAX(
+                    CASE
+                        WHEN NULLIF(LTRIM(RTRIM(so.our_ref)), '') IS NOT NULL
+                         AND LTRIM(RTRIM(so.our_ref))
+                                COLLATE Danish_Norwegian_CI_AS
+                             <> 'Intility Webshop'
+                                COLLATE Danish_Norwegian_CI_AS
+                            THEN LTRIM(RTRIM(so.our_ref))
+                                 COLLATE Danish_Norwegian_CI_AS
+                    END
+                ) AS manual_order_owner
+
+            FROM [dwh].[finance].[supplier_order] AS so
+
+            GROUP BY
+                so.supplier_order_number
+                    COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        /*
+        Medius-fakturaer som matcher på:
+        - PO-nummer
+        - leverandørnummer
+        - artikkelnummer
+        */
+        MediusArticleMatches AS
+        (
+            SELECT
+                ih.visma_purchase_order
+                    COLLATE Danish_Norwegian_CI_AS AS po_number,
+
+                ih.supplier_id
+                    COLLATE Danish_Norwegian_CI_AS AS supplier_id,
+
+                il.article_code
+                    COLLATE Danish_Norwegian_CI_AS AS article_code,
+
+                COUNT_BIG(*) AS matching_invoice_line_count,
+
+                MAX(
+                    CASE
+                        WHEN ih.invoice_type = 'Non-PO invoice'
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_cost_invoice_via_po,
+
+                MAX(
+                    CASE
+                        WHEN ih.processing_status = 'Archived'
+                         AND ih.invoice_type = 'Non-PO invoice'
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_cost_archived_via_po,
+
+                MAX(
+                    CASE
+                        WHEN ih.processing_status = 'Archived'
+                         AND
+                         (
+                             ih.invoice_type <> 'Non-PO invoice'
+                             OR ih.invoice_type IS NULL
+                         )
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_goods_archived_via_po,
+
+                MAX(
+                    CASE
+                        WHEN ih.processing_status = 'Invalidated'
+                         AND
+                         (
+                             ih.invoice_type <> 'Non-PO invoice'
+                             OR ih.invoice_type IS NULL
+                         )
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_goods_invalidated_via_po,
+
+                MAX(
+                    CASE
+                        WHEN ih.processing_status = 'Open'
+                         AND
+                         (
+                             ih.invoice_type <> 'Non-PO invoice'
+                             OR ih.invoice_type IS NULL
+                         )
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_goods_open_via_po
+
+            FROM [dwh].[finance].[medius_invoice_head] AS ih
+
+            INNER JOIN [dwh].[finance].[medius_invoice_lines] AS il
+                ON il.document_id COLLATE Danish_Norwegian_CI_AS
+                 = ih.document_id COLLATE Danish_Norwegian_CI_AS
+
+            WHERE ih.visma_purchase_order IS NOT NULL
+
+            GROUP BY
+                ih.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
+                ih.supplier_id COLLATE Danish_Norwegian_CI_AS,
+                il.article_code COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        /* Kostnadsfaktura direkte på PO-nummer */
+        MediusDirectCostInvoices AS
+        (
+            SELECT
+                ih.visma_purchase_order
+                    COLLATE Danish_Norwegian_CI_AS AS po_number,
+
+                ih.supplier_id
+                    COLLATE Danish_Norwegian_CI_AS AS supplier_id,
+
+                MAX(
+                    CASE
+                        WHEN ih.invoice_type = 'Non-PO invoice'
+                         AND ih.processing_status = 'Archived'
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_cost_archived_directly,
+
+                MAX(
+                    CASE
+                        WHEN ih.invoice_type = 'Non-PO invoice'
+                         AND ih.processing_status = 'Open'
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_cost_open_directly
+
+            FROM [dwh].[finance].[medius_invoice_head] AS ih
+            WHERE ih.visma_purchase_order IS NOT NULL
+
+            GROUP BY
+                ih.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
+                ih.supplier_id COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        /* Medius-koblinger via bestillingsnummer */
+        MediusConnectionMatches AS
+        (
+            SELECT
+                moc.visma_purchase_order
+                    COLLATE Danish_Norwegian_CI_AS AS po_number,
+
+                ih.supplier_id
+                    COLLATE Danish_Norwegian_CI_AS AS supplier_id,
+
+                COUNT_BIG(*) AS connection_count,
+
+                MAX(
+                    CASE
+                        WHEN ih.invoice_type = 'Non-PO invoice'
+                         AND ih.processing_status = 'Archived'
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_cost_archived_via_order_number,
+
+                MAX(
+                    CASE
+                        WHEN ih.invoice_type = 'Non-PO invoice'
+                         AND ih.processing_status = 'Open'
+                            THEN 1
+                        ELSE 0
+                    END
+                ) AS is_cost_open_via_order_number
+
+            FROM [dwh].[finance].[medius_order_connections] AS moc
+
+            INNER JOIN [dwh].[finance].[medius_invoice_head] AS ih
+                ON ih.document_id COLLATE Danish_Norwegian_CI_AS
+                 = moc.document_id COLLATE Danish_Norwegian_CI_AS
+
+            WHERE moc.visma_purchase_order IS NOT NULL
+
+            GROUP BY
+                moc.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
+                ih.supplier_id COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        ${TICKET_CTES}
         Combined AS
         (
             SELECT
@@ -722,6 +763,7 @@ async function fetchAvvikRows() {
                 sol.lot_number,
                 sol.order_date,
                 sol.days_waiting,
+                sol.earliest_receipt_at,
                 sol.department_number,
                 sol.po_number,
                 sol.reference_id,
@@ -870,12 +912,133 @@ async function fetchAvvikRows() {
             ticket_url,
             case_owner,
             deviation_scenario,
-            project_number
+            project_number,
+            earliest_receipt_at
         FROM Combined
         ORDER BY
             days_waiting DESC,
             supplier_order_number,
             article_number;
+      `);
+    return result.recordset;
+  });
+}
+
+// Closed history for the archive and the trend chart. An order line leaves
+// supplier_order_line (status 3030) and shows up in supplier_order_line_copy
+// with status 3130 once it is matched to a supplier invoice - and stays there,
+// so unlike the app's own state it survives restarts. The copy table has no
+// "resolved at" column; the date comes from the matching Archived invoice head
+// instead (medius_invoice_head.archived_at), matched on PO + supplier only,
+// because medius_invoice_lines use Medius' own article codes and never match
+// the copy table's article_number. A PO with several Archived invoices uses
+// the earliest one, so a line can be dated by an invoice that did not cover
+// it - an approximation, not a per-line fact. An 'Invalidated' head is never
+// used even though it carries the same archived_at.
+//
+// Only lines that waited more than 21 days from first receipt to archive are
+// returned (same threshold fetchAvvikRows applies to open lines), so quick
+// normal invoicing never reaches the archive or the chart. Aggregated in SQL
+// and projected narrowly on purpose: the app runs with a small Node heap.
+async function fetchResolvedHistory() {
+  return withPool(async (pool, sql) => {
+    const result = await pool
+      .request()
+      .input('mainCutoff', sql.Date, MAIN_TABLE_CUTOFF_DATE)
+      .input('ticketsCutoff', sql.Date, TICKETS_CUTOFF_DATE)
+      .query(`
+        WITH EarliestReceiptByOrderArticle AS
+        (
+            SELECT
+                sh.order_number COLLATE Danish_Norwegian_CI_AS AS order_number,
+                sh.article_number COLLATE Danish_Norwegian_CI_AS AS article_number,
+                MIN(sh.date_of_movement) AS earliest_receipt_at
+            FROM [dwh].[workplace].[stock_history] AS sh
+            WHERE sh.quantity > 0
+            GROUP BY
+                sh.order_number COLLATE Danish_Norwegian_CI_AS,
+                sh.article_number COLLATE Danish_Norwegian_CI_AS
+        ),
+        ArchivedByPoSupplier AS
+        (
+            SELECT
+                ih.visma_purchase_order COLLATE Danish_Norwegian_CI_AS AS po_number,
+                CONVERT(varchar(50), ih.supplier_id) COLLATE Danish_Norwegian_CI_AS AS supplier_id_text,
+                MIN(ih.archived_at) AS archived_at
+            FROM [dwh].[finance].[medius_invoice_head] AS ih
+            WHERE ih.processing_status = 'Archived'
+              AND ih.archived_at IS NOT NULL
+            GROUP BY
+                ih.visma_purchase_order COLLATE Danish_Norwegian_CI_AS,
+                CONVERT(varchar(50), ih.supplier_id) COLLATE Danish_Norwegian_CI_AS
+        ),
+        ${TICKET_CTES}
+        /*
+        Manuell ordre: ordrehodet har en our_ref som verken er tom eller
+        "Intility Webshop" (samme regel som SupplierOrders i fetchAvvikRows).
+        Ordrehodet finnes bare for en liten andel av de lukkede linjene, så
+        denne regelen treffer få.
+        */
+        ManualOrderHeads AS
+        (
+            SELECT
+                so.supplier_order_number COLLATE Danish_Norwegian_CI_AS AS supplier_order_number,
+                MAX(
+                    CASE
+                        WHEN NULLIF(LTRIM(RTRIM(so.our_ref)), '') IS NOT NULL
+                         AND LTRIM(RTRIM(so.our_ref)) COLLATE Danish_Norwegian_CI_AS
+                             <> 'Intility Webshop' COLLATE Danish_Norwegian_CI_AS
+                            THEN LTRIM(RTRIM(so.our_ref)) COLLATE Danish_Norwegian_CI_AS
+                    END
+                ) AS manual_order_owner
+            FROM [dwh].[finance].[supplier_order] AS so
+            GROUP BY so.supplier_order_number COLLATE Danish_Norwegian_CI_AS
+        ),
+        CopyLines AS
+        (
+            SELECT
+                c.supplier_order_copy_number COLLATE Danish_Norwegian_CI_AS AS supplier_order_number,
+                c.article_number COLLATE Danish_Norwegian_CI_AS AS article_number,
+                c.lot_number,
+                c.order_date,
+                c.department_number,
+                c.project_number,
+                NULLIF(LTRIM(RTRIM(
+                    CASE WHEN CHARINDEX('-', c.reference_id) > 0
+                         THEN LEFT(c.reference_id, CHARINDEX('-', c.reference_id) - 1)
+                         ELSE c.reference_id END
+                )), '') COLLATE Danish_Norwegian_CI_AS AS po_number,
+                CONVERT(varchar(50), c.supplier_number) COLLATE Danish_Norwegian_CI_AS AS supplier_id_text
+            FROM [dwh].[finance].[supplier_order_line_copy] AS c
+            WHERE c.order_status = 3130
+              AND c.order_date >= @mainCutoff
+        )
+        SELECT
+            cl.supplier_order_number,
+            cl.article_number,
+            cl.lot_number,
+            cl.order_date,
+            cl.department_number,
+            cl.project_number,
+            cl.po_number,
+            CAST(er.earliest_receipt_at AS date) AS earliest_receipt_at,
+            CAST(ap.archived_at AS date) AS archived_at,
+            NULLIF(LTRIM(RTRIM(pt.intility_worker_fullname)), '') AS case_owner,
+            pt.ticket_url,
+            moh.manual_order_owner
+        FROM CopyLines AS cl
+        INNER JOIN EarliestReceiptByOrderArticle AS er
+            ON er.order_number = cl.supplier_order_number
+           AND er.article_number = cl.article_number
+        INNER JOIN ArchivedByPoSupplier AS ap
+            ON ap.po_number = cl.po_number
+           AND ap.supplier_id_text = cl.supplier_id_text
+        LEFT JOIN ManualOrderHeads AS moh
+            ON moh.supplier_order_number = cl.supplier_order_number
+        LEFT JOIN PreferredTicket AS pt
+            ON pt.po_number COLLATE Danish_Norwegian_CI_AS = cl.po_number COLLATE Danish_Norwegian_CI_AS
+        WHERE DATEDIFF(DAY, CAST(er.earliest_receipt_at AS date), CAST(ap.archived_at AS date)) > 21
+        ORDER BY ap.archived_at DESC, cl.supplier_order_number, cl.article_number;
       `);
     return result.recordset;
   });
@@ -923,9 +1086,10 @@ async function fetchDepartments() {
 // avvikSync.js's pickBestMediusInvoice can prioritize deterministically and
 // stay unit-testable; a plain ORDER BY in SQL would encode the same
 // priority but couldn't be exercised without a live dwh connection.
-async function fetchMediusLinks() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchMediusLinks(poNumbers) {
+  if (hasNoKeys(poNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, poNumbers).query(`
       SELECT
         mil.visma_purchase_order,
         mil.article_code,
@@ -933,12 +1097,14 @@ async function fetchMediusLinks() {
         mih.invoice_number,
         mih.medius_link,
         mih.processing_status,
-        mih.document_id
+        mih.document_id,
+        mih.amount
       FROM [dwh].[finance].[medius_invoice_lines] mil
       INNER JOIN [dwh].[finance].[medius_invoice_head] mih
         ON mih.visma_purchase_order = mil.visma_purchase_order
        AND mih.supplier_id = mil.supplier_id
       WHERE mih.medius_link IS NOT NULL
+        AND ${keyFilter('mil.visma_purchase_order', poNumbers)}
     `);
     return result.recordset;
   });
@@ -956,20 +1122,23 @@ async function fetchMediusLinks() {
 // join found nothing, while this direct/bridge match did). Mirrors those same
 // two CTEs, unioned since avvikSync.js only needs one PO+supplier-keyed
 // candidate pool from them, not which path each came from.
-async function fetchMediusCostInvoiceLinks() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchMediusCostInvoiceLinks(poNumbers) {
+  if (hasNoKeys(poNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, poNumbers).query(`
       SELECT
         ih.visma_purchase_order,
         ih.supplier_id,
         ih.invoice_number,
         ih.medius_link,
         ih.processing_status,
-        ih.document_id
+        ih.document_id,
+        ih.amount
       FROM [dwh].[finance].[medius_invoice_head] ih
       WHERE ih.invoice_type = 'Non-PO invoice'
         AND ih.visma_purchase_order IS NOT NULL
         AND ih.medius_link IS NOT NULL
+        AND ${keyFilter('ih.visma_purchase_order', poNumbers)}
 
       UNION ALL
 
@@ -979,12 +1148,14 @@ async function fetchMediusCostInvoiceLinks() {
         ih.invoice_number,
         ih.medius_link,
         ih.processing_status,
-        ih.document_id
+        ih.document_id,
+        ih.amount
       FROM [dwh].[finance].[medius_order_connections] moc
       INNER JOIN [dwh].[finance].[medius_invoice_head] ih
         ON ih.document_id = moc.document_id
       WHERE moc.visma_purchase_order IS NOT NULL
         AND ih.medius_link IS NOT NULL
+        AND ${keyFilter('moc.visma_purchase_order', poNumbers)}
     `);
     return result.recordset;
   });
@@ -1006,9 +1177,10 @@ async function fetchMediusCostInvoiceLinks() {
 // available here (no reversal/voucher reference on this table) - see the
 // investigation in avvikSync.js. Positive rows are therefore only ever added
 // to total_quantity, never subtracted back out of either category.
-async function fetchStockMovementBreakdownByLot() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchStockMovementBreakdownByLot(lotNumbers) {
+  if (hasNoKeys(lotNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, lotNumbers).query(`
       SELECT
           sh.lot_number,
           SUM(CASE WHEN sh.quantity > 0 THEN sh.quantity ELSE 0 END) AS total_quantity,
@@ -1016,6 +1188,7 @@ async function fetchStockMovementBreakdownByLot() {
           ABS(SUM(CASE WHEN sh.quantity < 0 AND sh.type_of_change IN (4, 5, 1040, 3020, 3030, 3040, 3130) THEN sh.quantity ELSE 0 END)) AS resold_quantity
       FROM [dwh].[workplace].[stock_history] AS sh
       WHERE sh.lot_number IS NOT NULL
+        AND ${keyFilter('CONVERT(varchar(50), sh.lot_number)', lotNumbers)}
       GROUP BY sh.lot_number
     `);
     return result.recordset;
@@ -1034,9 +1207,10 @@ async function fetchStockMovementBreakdownByLot() {
 // charge deviation", "Total amount deviation", "Quantity deviation", "Unit
 // price deviation", "Line amount deviation" (see src/invoiceDeviations.js for
 // the Norwegian descriptions used in the email).
-async function fetchOrderDeviations() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchOrderDeviations(orderNumbers) {
+  if (hasNoKeys(orderNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, orderNumbers).query(`
       SELECT
         purchase_order,
         article_code,
@@ -1044,6 +1218,7 @@ async function fetchOrderDeviations() {
         document_number
       FROM [dwh].[finance].[medius_order_deviations]
       WHERE deviation_name IS NOT NULL
+        AND ${keyFilter('purchase_order', orderNumbers)}
     `);
     return result.recordset;
   });
@@ -1054,9 +1229,10 @@ async function fetchOrderDeviations() {
 // display-only "ordrelinje" card showing what was actually ordered/received/
 // connected so far. purchase_order + article_code is the join key back to an
 // avvik row's own supplier_order_number + article_number (see avvikSync.js).
-async function fetchMediusOrderLines() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchMediusOrderLines(orderNumbers) {
+  if (hasNoKeys(orderNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, orderNumbers).query(`
       SELECT
         purchase_order,
         article_code,
@@ -1073,6 +1249,7 @@ async function fetchMediusOrderLines() {
         received_not_connected_quantity,
         received_not_connected_amount
       FROM [dwh].[finance].[medius_order_lines]
+      WHERE ${keyFilter('purchase_order', orderNumbers)}
     `);
     return result.recordset;
   });
@@ -1086,9 +1263,10 @@ async function fetchMediusOrderLines() {
 // article_number + supplier number (see invoiceSuggestions.js); whether
 // visma_purchase_order also matches the order line's reference_id decides
 // strong vs. weak suggestion strength there.
-async function fetchUnconnectedInvoiceLines() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchUnconnectedInvoiceLines(articleCodes) {
+  if (hasNoKeys(articleCodes)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, articleCodes).query(`
       SELECT
         invoice_number,
         visma_purchase_order,
@@ -1105,8 +1283,9 @@ async function fetchUnconnectedInvoiceLines() {
         quantity_not_connected_to_purchase_order_line,
         amount_not_connected_to_purchase_order_line
       FROM [dwh].[finance].[medius_invoice_lines]
-      WHERE connection_status = 'Empty'
-         OR quantity_not_connected_to_purchase_order_line > 0
+      WHERE (connection_status = 'Empty'
+         OR quantity_not_connected_to_purchase_order_line > 0)
+        AND ${keyFilter('article_code', articleCodes)}
     `);
     return result.recordset;
   });
@@ -1124,9 +1303,10 @@ async function fetchUnconnectedInvoiceLines() {
 // sometimes even with different invoice_type values) - avvikSync.js keeps
 // only the Archived one (invoiceSuggestions.js's pickArchivedInvoiceHead); a
 // candidate with no Archived row at all is never suggested.
-async function fetchMediusInvoiceHeadByNumber() {
-  return withPool(async (pool) => {
-    const result = await pool.request().query(`
+async function fetchMediusInvoiceHeadByNumber(invoiceNumbers) {
+  if (hasNoKeys(invoiceNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, invoiceNumbers).query(`
       SELECT
         invoice_number,
         invoice_type,
@@ -1137,6 +1317,7 @@ async function fetchMediusInvoiceHeadByNumber() {
         document_id
       FROM [dwh].[finance].[medius_invoice_head]
       WHERE medius_link IS NOT NULL
+        AND ${keyFilter('invoice_number', invoiceNumbers)}
     `);
     return result.recordset;
   });
@@ -1144,6 +1325,7 @@ async function fetchMediusInvoiceHeadByNumber() {
 
 module.exports = {
   fetchAvvikRows,
+  fetchResolvedHistory,
   fetchIntilityUsers,
   fetchDepartments,
   fetchMediusLinks,
