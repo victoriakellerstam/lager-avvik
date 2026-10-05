@@ -11,7 +11,7 @@
 // day a line counts.
 const WAIT_DAYS = 21;
 const DAY_MS = 86400000;
-const CHART_FROM = '2026-08-01';
+const CHART_FROM = '2026-01-01';
 
 // Self-contained on purpose (no closure over module scope): dashboard.js also
 // ships this function's source to the browser, where the filtered chart is
@@ -69,6 +69,10 @@ function toChartItem(avvik, today) {
     department: (avvik.department || '').toLowerCase(),
     purchaser: (avvik.purchaserName || '').toLowerCase(),
     type: (avvik.discrepancyType || '').toLowerCase(),
+    // Visningsnavn og status for filtrene på Utvikling-siden.
+    supplierName: (avvik.supplierName || '').trim() || 'Ukjent leverandør',
+    departmentName: (avvik.department || '').trim() || 'Ukjent avdeling',
+    resolved: Boolean(avvik.resolved),
   };
 }
 
@@ -76,4 +80,62 @@ function buildChartItems(avvikList, today = new Date().toISOString().slice(0, 10
   return avvikList.map((a) => toChartItem(a, today)).filter(Boolean);
 }
 
-module.exports = { buildDailySeries, buildChartItems, CHART_FROM, WAIT_DAYS };
+// Utvikling-sidens perioder (dager bakover fra i dag).
+const PERIODS = { 30: 'Siste 30 dager', 90: 'Siste 90 dager', 365: 'Siste 12 måneder', alle: 'Alle' };
+
+// Perioden som datoer. Historikken starter ikke før CHART_FROM, så en lengre
+// periode kuttes der (clamped = true) i stedet for å vise en misvisende flat
+// null-linje bakover i tid.
+function periodRange(period, today) {
+  const days = period !== 'alle' && PERIODS[period] ? Number(period) : null;
+  const wanted = days ? addDays(today, -(days - 1)) : CHART_FROM;
+  const clamped = days !== null && wanted < CHART_FROM;
+  return { from: clamped || !days ? CHART_FROM : wanted, to: today, clamped };
+}
+
+// 'apne' = åpne på siste dag i perioden, 'registrert' = begynte å telle i
+// perioden, 'lukket' = ble løst i perioden.
+function inMode(item, mode, from, to) {
+  if (mode === 'registrert') return item.start >= from && item.start <= to;
+  if (mode === 'lukket') return Boolean(item.end) && item.end >= from && item.end <= to;
+  return item.start <= to && (!item.end || item.end > to);
+}
+
+// Radene som passer filtrene og visningen: department/supplier er visningsnavn,
+// status er 'apne' | 'lukket' | tom (alle).
+function selectChartItems(items, { mode, from, to, department, supplier, status }) {
+  return items.filter(
+    (item) =>
+      (!department || item.departmentName === department) &&
+      (!supplier || item.supplierName === supplier) &&
+      (!status || (status === 'lukket') === item.resolved) &&
+      inMode(item, mode, from, to)
+  );
+}
+
+// Antall hendelser (start eller end) per bøtte på bucketDays dager, fra `from`.
+function buildEventSeries(items, field, from, to, bucketDays) {
+  const day = (iso) => Math.floor(Date.parse(iso.slice(0, 10) + 'T00:00:00Z') / DAY_MS);
+  const fromDay = day(from);
+  const length = day(to) - fromDay + 1;
+  if (length <= 0) return [];
+  const buckets = Math.ceil(length / bucketDays);
+  const counts = new Array(buckets).fill(0);
+  items.forEach((item) => {
+    if (!item[field]) return;
+    const idx = Math.floor((day(item[field]) - fromDay) / bucketDays);
+    if (idx >= 0 && idx < buckets) counts[idx] += 1;
+  });
+  return counts.map((count, i) => ({ date: addDays(from, i * bucketDays), count }));
+}
+
+module.exports = {
+  buildDailySeries,
+  buildChartItems,
+  buildEventSeries,
+  selectChartItems,
+  periodRange,
+  PERIODS,
+  CHART_FROM,
+  WAIT_DAYS,
+};

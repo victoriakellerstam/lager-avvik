@@ -159,7 +159,7 @@ function createServer() {
       }
 
       if (req.method === 'GET' && pathname === '/utvikling') {
-        const html = renderUtviklingPage(store.listAvvik());
+        const html = renderUtviklingPage(store.listAvvik(), Object.fromEntries(url.searchParams));
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }

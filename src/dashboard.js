@@ -10,7 +10,7 @@ const {
   UNKNOWN_HISTORY_TYPE,
 } = require('./discrepancyTypes');
 const { getAvvikDetailContent } = require('./avvikDetailContent');
-const { buildDailySeries, buildChartItems, CHART_FROM } = require('./history');
+const { buildDailySeries, buildChartItems, buildEventSeries, selectChartItems, periodRange, PERIODS, CHART_FROM } = require('./history');
 const { MAX_FILES, MAX_FILE_BYTES, ALLOWED_EXTENSIONS } = require('./attachments');
 
 function escapeHtml(value) {
@@ -1217,37 +1217,66 @@ const SHARED_STYLE = `
   .trend-card { flex: 1; display: flex; min-width: 0; box-shadow: 0 1px 3px var(--bfc-shadow); }
   .trend-card .bf-card-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .trend-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--bfs8); flex-wrap: wrap; }
-  .trend-title { font-size: var(--bf-font-size-m); font-weight: 600; color: var(--bfc-base-c); }
-  .trend-legend { display: flex; align-items: center; gap: var(--bfs12); font-size: var(--bf-font-size-s); color: var(--bfc-base-c); }
-  .trend-legend [hidden] { display: none; }
-  .legend-line { display: inline-block; width: 1.25rem; border-top: 2px solid; vertical-align: middle; margin-right: var(--bfs4); }
-  .legend-total { border-color: var(--bfc-theme); }
-  .legend-filter { border-color: var(--bfc-base-c); }
-  .trend-chart { position: relative; flex: 1; min-height: 11rem; margin-top: var(--bfs8); }
+  .trend-title { margin: 0; font-size: var(--bf-font-size-h3); font-weight: 700; color: var(--bfc-base-c); }
+  .trend-period { font-size: var(--bf-font-size-l); color: var(--bfc-base-c); opacity: 0.85; }
+  .trend-chart { position: relative; flex: 1; min-height: 14rem; margin-top: var(--bfs12); }
   .trend-svg { position: absolute; inset: 0; }
-  .trend-grid { stroke: var(--bfc-base-c); stroke-opacity: 0.15; stroke-width: 1; }
-  .trend-line { stroke: var(--bfc-theme); stroke-width: 2; stroke-linejoin: round; fill: none; }
-  .trend-line-filter { stroke: var(--bfc-base-c); stroke-width: 2; stroke-linejoin: round; fill: none; }
-  .trend-label { fill: var(--bfc-base-c); fill-opacity: 0.7; font-size: 10px; }
+  .trend-grid { stroke: var(--bfc-base-c); stroke-opacity: 0.18; stroke-width: 1; }
+  .trend-axis { stroke: var(--bfc-base-c); stroke-opacity: 0.5; stroke-width: 1; }
+  .trend-line { stroke: var(--bfc-theme); stroke-width: 3; stroke-linejoin: round; fill: none; }
+  .trend-bar { fill: var(--bfc-theme); }
+  .trend-label { fill: var(--bfc-base-c); fill-opacity: 0.9; font-size: 13px; }
   .trend-hit { fill: transparent; }
   .trend-hit:hover { fill: var(--bfc-theme); }
-  .trend-note { color: var(--bfc-base-c); opacity: 0.7; font-size: var(--bf-font-size-s); margin-top: var(--bfs4); }
-  /* Utvikling-siden: grafen og leverandørdiagrammet får hele bredden. */
+  .trend-note { color: var(--bfc-base-c); opacity: 0.85; font-size: var(--bf-font-size-m); margin: var(--bfs8) 0 0; }
+  /* Utvikling-siden: én aksentfarge (--bfc-theme) for all utvikling; varselfarger brukes ikke her. */
   .utvikling-page { display: flex; flex-direction: column; gap: var(--bfs24); }
-  .utvikling-trend .trend-chart { min-height: 20rem; }
+  .utvikling-trend .trend-chart { min-height: 26rem; }
+  .filter-panel { display: flex; flex-direction: column; gap: var(--bfs12); }
+  .filter-panel .filter-group { display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
+  .filter-group-label { font-size: var(--bf-font-size-l); font-weight: 600; color: var(--bfc-base-c); min-width: 6rem; }
+  .segmented { display: inline-flex; border: var(--bf-border); border-radius: var(--bf-radius-s); overflow: hidden; }
+  .segmented a { padding: var(--bfs8) var(--bfs16); font-size: var(--bf-font-size-m); color: var(--bfc-base-c); text-decoration: none; border-left: var(--bf-border); }
+  .segmented a:first-child { border-left: none; }
+  .segmented a:hover { background: var(--bfc-theme-fade); }
+  .segmented a[aria-current='true'] { background: var(--bfc-theme); color: var(--bfc-theme-c, #fff); font-weight: 600; }
+  .filter-selects { display: flex; gap: var(--bfs16); flex-wrap: wrap; align-items: flex-end; }
+  .filter-selects label { display: flex; flex-direction: column; gap: var(--bfs4); font-size: var(--bf-font-size-m); font-weight: 600; color: var(--bfc-base-c); }
+  .filter-selects select { min-width: 12rem; max-width: 20rem; font-size: var(--bf-font-size-m); }
+  .active-filters { display: flex; align-items: center; gap: var(--bfs8); flex-wrap: wrap; }
+  .active-filters .filter-chip { margin-bottom: 0; font-size: var(--bf-font-size-m); }
+  .active-filters .filter-chip a { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; color: var(--bfc-base-c); border-radius: var(--bf-radius-full); }
+  .active-filters .filter-chip a:hover { background: var(--bfc-theme-fade); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: var(--bfs16); }
+  .kpi { display: block; color: var(--bfc-base-c); text-decoration: none; border-radius: var(--bf-radius-m, var(--bf-radius-s)); }
+  .kpi .bf-card { height: 100%; box-shadow: 0 1px 3px var(--bfc-shadow); }
+  .kpi[aria-current='true'] .bf-card { border-color: var(--bfc-theme); box-shadow: 0 0 0 2px var(--bfc-theme); }
+  .kpi:hover .bf-card { background: var(--bfc-theme-fade); }
+  .kpi-number { font-size: 2.5rem; line-height: 1.1; font-weight: 700; color: var(--bfc-theme); }
+  .kpi-label { font-size: var(--bf-font-size-l); font-weight: 600; margin-top: var(--bfs4); }
   .supplier-card { box-shadow: 0 1px 3px var(--bfc-shadow); }
-  .chart-sub { margin: var(--bfs4) 0 var(--bfs12); color: var(--bfc-base-c); opacity: 0.7; font-size: var(--bf-font-size-s); }
-  .bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-  .bar-row { display: grid; grid-template-columns: minmax(8rem, 18rem) minmax(0, 1fr); align-items: center; gap: var(--bfs12); padding: 3px var(--bfs8); border-radius: var(--bf-radius-s); outline-offset: -2px; }
+  .supplier-card h2 { margin: 0; font-size: var(--bf-font-size-h3); font-weight: 700; }
+  .chart-sub { margin: var(--bfs4) 0 var(--bfs16); color: var(--bfc-base-c); opacity: 0.85; font-size: var(--bf-font-size-m); }
+  .bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .bar-row { display: grid; grid-template-columns: minmax(10rem, 20rem) minmax(0, 1fr); align-items: center; gap: var(--bfs16); padding: 4px var(--bfs8); border-radius: var(--bf-radius-s); outline-offset: -2px; }
   .bar-row:hover, .bar-row:focus-visible { background: var(--bfc-theme-fade); }
   a.bar-row { color: inherit; text-decoration: none; cursor: pointer; }
   .filter-chip { display: inline-flex; align-items: center; gap: var(--bfs4); margin-bottom: var(--bfs12); padding: var(--bfs4) var(--bfs4) var(--bfs4) var(--bfs12); background: var(--bfc-theme-fade); border: var(--bf-border); border-radius: var(--bf-radius-full); font-size: var(--bf-font-size-s); }
   .filter-chip[hidden] { display: none; }
   .chip-clear { min-width: 28px; min-height: 28px; }
-  .bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--bf-font-size-s); color: var(--bfc-base-c); text-align: right; }
-  .bar-track { position: relative; height: 18px; margin-right: 3rem; border-left: 1px solid var(--bfc-base-c); border-left-color: color-mix(in srgb, var(--bfc-base-c) 35%, transparent); }
-  .bar-fill { display: block; height: 100%; min-width: 2px; background: var(--bfc-theme); border-radius: 0 4px 4px 0; }
-  .bar-value { position: absolute; top: 50%; transform: translateY(-50%); margin-left: 6px; font-size: var(--bf-font-size-s); font-weight: 600; color: var(--bfc-base-c); white-space: nowrap; }
+  /* Leverandørnavn brytes over to linjer i stedet for å kuttes med «…». */
+  .bar-label { font-size: var(--bf-font-size-l); line-height: 1.25; color: var(--bfc-base-c); text-align: right; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .bar-track { position: relative; height: 28px; margin-right: 3.5rem; border-left: 1px solid color-mix(in srgb, var(--bfc-base-c) 50%, transparent); background-image: linear-gradient(to right, color-mix(in srgb, var(--bfc-base-c) 18%, transparent) 1px, transparent 1px); background-size: calc(100% / var(--ticks, 1)) 100%; }
+  .bar-fill { display: block; height: 100%; min-width: 3px; background: var(--bfc-theme); border-radius: 0 4px 4px 0; }
+  .bar-value { position: absolute; top: 50%; transform: translateY(-50%); margin-left: 8px; font-size: var(--bf-font-size-l); font-weight: 700; color: var(--bfc-base-c); white-space: nowrap; }
+  .bar-axis { display: grid; grid-template-columns: minmax(10rem, 20rem) minmax(0, 1fr); gap: var(--bfs16); padding: 0 var(--bfs8); }
+  .bar-axis-track { position: relative; height: 1.5rem; margin-right: 3.5rem; }
+  .bar-axis-tick { position: absolute; transform: translateX(-50%); font-size: var(--bf-font-size-m); color: var(--bfc-base-c); opacity: 0.9; }
+  .bar-axis-tick:first-child { transform: none; }
+  .bar-axis-title { align-self: end; text-align: right; font-size: var(--bf-font-size-s); color: var(--bfc-base-c); opacity: 0.8; }
+  .supplier-more { margin-top: var(--bfs12); }
+  .supplier-more summary { font-size: var(--bf-font-size-l); font-weight: 600; cursor: pointer; padding: var(--bfs8) 0; }
+  .supplier-more .bar-list { margin-top: var(--bfs8); }
   .chart-tooltip { position: fixed; z-index: 70; pointer-events: none; background: var(--bfc-base-3); color: var(--bfc-base-c); border: var(--bf-border); border-radius: var(--bf-radius-s); box-shadow: 0 4px 12px var(--bfc-shadow); padding: var(--bfs8) var(--bfs12); font-size: var(--bf-font-size-s); max-width: 22rem; }
   .chart-tooltip strong { display: block; font-size: var(--bf-font-size-m); }
   .chart-table { margin-top: var(--bfs12); }
@@ -1363,33 +1392,22 @@ const SHARED_STYLE = `
   }
 `;
 
-// Trend chart for "Avvik totalt", shown beside the key figures. The server only
-// embeds one item per avvik (when it started counting, when it was resolved,
-// and the values the filter boxes match against); the browser builds both
-// series with history.js's buildDailySeries, whose source is shipped below so
-// the total and the filtered line can never disagree. Filtering the table adds
-// a second line to this same chart rather than a second chart. A closed avvik
-// has no purchaser or avvikstype in dwh (see avvikSync.js's
-// syncResolvedHistory), so those two filters only see open ones - the note
-// under the chart says so.
-function renderTrendSection(avvikList) {
-  const today = new Date().toISOString().slice(0, 10);
-  const items = buildChartItems(avvikList, today);
+// Utviklingsgrafen. Serveren har allerede filtrert og telt (history.js), så
+// nettleseren bare tegner: en linje for «Åpne» (saldo per dag) eller stolper
+// for «Registrerte»/«Lukkede» (antall per dag eller uke). Perioden og hva
+// grafen teller står i tittelen, ikke bare i filtrene.
+function renderTrendSection({ series, mode, bucketDays, title, periodLabel, note }) {
   // "<" inside the JSON would let a value close the script element early.
-  const payload = JSON.stringify({ items, from: CHART_FROM, to: today }).replace(/</g, '\\u003c');
-  const fromLabel = new Date(CHART_FROM).toLocaleDateString('no-NO', { day: 'numeric', month: 'long', year: 'numeric' });
+  const payload = JSON.stringify({ series, mode, bucketDays }).replace(/</g, '\u003c');
   return `
     <section id="trend-section">
       <div class="bf-card trend-card"><div class="bf-card-content">
         <div class="trend-head">
-          <span class="trend-title">Avvik over tid (fra ${fromLabel})</span>
-          <span class="trend-legend">
-            <span><span class="legend-line legend-total"></span>Totalt</span>
-            <span id="trend-filter-legend" hidden><span class="legend-line legend-filter"></span><span id="trend-filter-label"></span></span>
-          </span>
+          <h2 class="trend-title">${escapeHtml(title)}</h2>
+          <span class="trend-period">${escapeHtml(periodLabel)}</span>
         </div>
-        <div id="trend-chart" class="trend-chart" aria-label="Antall avvik over tid"></div>
-        <div class="trend-note" id="trend-note" hidden>Løste saker har ikke avvikstype i historikken, og noen mangler innkjøper, så filterlinjen kan være for lav bakover i tid.</div>
+        <div id="trend-chart" class="trend-chart" role="img" aria-label="${escapeHtml(title)}, ${escapeHtml(periodLabel)}"></div>
+        ${note ? `<p class="trend-note">${escapeHtml(note)}</p>` : ''}
       </div></div>
       <script type="application/json" id="trend-data">${payload}</script>
     </section>`;
@@ -1400,55 +1418,59 @@ function renderTrendSection(avvikList) {
 // and crashes the app at startup (that already happened once in SHARED_STYLE).
 const TREND_SCRIPT = [
   '(function () {',
-  '  var buildDailySeries = ' + buildDailySeries.toString() + ';',
   "  var dataEl = document.getElementById('trend-data');",
   "  var chart = document.getElementById('trend-chart');",
   '  if (!dataEl || !chart) return;',
   '  var payload = JSON.parse(dataEl.textContent);',
+  '  var series = payload.series;',
   "  var NS = 'http://www.w3.org/2000/svg';",
-  '  var totalSeries = buildDailySeries(payload.items, payload.from, payload.to);',
-  '  var filteredSeries = null;',
   '  function el(name, attrs, text) {',
   '    var node = document.createElementNS(NS, name);',
   '    Object.keys(attrs || {}).forEach(function (k) { node.setAttribute(k, attrs[k]); });',
   '    if (text) node.textContent = text;',
   '    return node;',
   '  }',
+  '  function dm(iso) { return iso.slice(8) + \'.\' + iso.slice(5, 7); }',
   '  function draw() {',
   '    var W = chart.clientWidth, H = chart.clientHeight;',
-  '    if (W < 60 || H < 60) return;',
-  '    var L = 26, R = 8, T = 8, B = 18;',
+  '    if (W < 60 || H < 60 || !series.length) return;',
+  '    var L = 40, R = 12, T = 12, B = 30;',
   "    chart.textContent = '';",
-  '    var all = filteredSeries ? totalSeries.concat(filteredSeries) : totalSeries;',
-  '    var max = Math.max(1, Math.max.apply(null, all.map(function (p) { return p.count; })));',
-  '    var step = max <= 5 ? 1 : Math.ceil(max / 4);',
+  '    var max = Math.max(1, Math.max.apply(null, series.map(function (p) { return p.count; })));',
+  '    var raw = max / 5, pow = Math.pow(10, Math.floor(Math.log10(raw)));',
+  '    var step = Math.max(1, [1, 2, 5, 10].map(function (m) { return m * pow; }).filter(function (v) { return v >= raw; })[0]);',
   '    var top = Math.ceil(max / step) * step;',
-  '    var n = totalSeries.length;',
-  '    var x = function (i) { return L + (n <= 1 ? 0 : (i * (W - L - R)) / (n - 1)); };',
+  '    var n = series.length;',
+  "    var bars = payload.mode !== 'apne';",
+  '    var slot = (W - L - R) / (bars ? n : Math.max(n - 1, 1));',
+  '    var x = function (i) { return L + (bars ? slot * (i + 0.5) : i * slot); };',
   '    var y = function (v) { return T + (H - T - B) * (1 - v / top); };',
-  "    var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'class': 'trend-svg' });",
+  "    var svg = el('svg', { width: W, height: H, viewBox: '0 0 ' + W + ' ' + H, 'class': 'trend-svg', 'aria-hidden': 'true' });",
   '    for (var g = 0; g <= top; g += step) {',
-  "      svg.appendChild(el('line', { x1: L, x2: W - R, y1: y(g), y2: y(g), 'class': 'trend-grid' }));",
-  "      svg.appendChild(el('text', { x: L - 5, y: y(g) + 3, 'text-anchor': 'end', 'class': 'trend-label' }, String(g)));",
+  "      svg.appendChild(el('line', { x1: L, x2: W - R, y1: y(g), y2: y(g), 'class': g === 0 ? 'trend-axis' : 'trend-grid' }));",
+  "      svg.appendChild(el('text', { x: L - 8, y: y(g) + 5, 'text-anchor': 'end', 'class': 'trend-label' }, String(g)));",
   '    }',
-  '    totalSeries.forEach(function (p, i) {',
-  "      if (p.date.slice(8) === '01' || p.date.slice(8) === '15') {",
-  "        svg.appendChild(el('text', { x: x(i), y: H - 4, 'text-anchor': 'middle', 'class': 'trend-label' }, p.date.slice(8) + '.' + p.date.slice(5, 7)));",
-  '      }',
+  '    var every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor((W - L - R) / 64))));',
+  '    series.forEach(function (p, i) {',
+  '      if (i % every !== 0) return;',
+  "      svg.appendChild(el('text', { x: x(i), y: H - 8, 'text-anchor': 'middle', 'class': 'trend-label' }, dm(p.date)));",
   '    });',
-  '    function line(series, cls) {',
+  '    if (bars) {',
+  '      var bw = Math.max(2, slot * 0.7);',
+  '      series.forEach(function (p, i) {',
+  "        var rect = el('rect', { x: x(i) - bw / 2, y: y(p.count), width: bw, height: Math.max(0, y(0) - y(p.count)), rx: 2, 'class': 'trend-bar' });",
+  "        rect.appendChild(el('title', {}, (payload.bucketDays > 1 ? 'Uke fra ' : '') + p.date + ': ' + p.count + ' avvik'));",
+  '        svg.appendChild(rect);',
+  '      });',
+  '    } else {',
   "      var points = series.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p.count).toFixed(1); }).join(' ');",
-  "      svg.appendChild(el('polyline', { points: points, 'class': cls }));",
+  "      svg.appendChild(el('polyline', { points: points, 'class': 'trend-line' }));",
+  '      series.forEach(function (p, i) {',
+  "        var hit = el('circle', { cx: x(i), cy: y(p.count), r: 5, 'class': 'trend-hit' });",
+  "        hit.appendChild(el('title', {}, p.date + ': ' + p.count + ' åpne avvik'));",
+  '        svg.appendChild(hit);',
+  '      });',
   '    }',
-  "    line(totalSeries, 'trend-line');",
-  "    if (filteredSeries) line(filteredSeries, 'trend-line-filter');",
-  '    totalSeries.forEach(function (p, i) {',
-  "      var hit = el('circle', { cx: x(i), cy: y(p.count), r: 4, 'class': 'trend-hit' });",
-  "      var label = p.date + ': ' + p.count + ' avvik';",
-  "      if (filteredSeries) label += ' (filter: ' + filteredSeries[i].count + ')';",
-  "      hit.appendChild(el('title', {}, label));",
-  '      svg.appendChild(hit);',
-  '    });',
   '    chart.appendChild(svg);',
   '  }',
   "  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(draw).observe(chart);",
@@ -1456,37 +1478,6 @@ const TREND_SCRIPT = [
   '  draw();',
   "  window.addEventListener('load', draw);",
   "  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);",
-  '',
-  "  var section = document.getElementById('open-section');",
-  '  if (!section) return;',
-  "  var inputs = section.querySelectorAll('.filter-input');",
-  "  var LABELS = { order: 'ordre', po: 'PO-nummer', purchaser: 'innkjøper', department: 'avdeling', type: 'avvikstype' };",
-  '  function update() {',
-  '    var filters = {};',
-  '    inputs.forEach(function (input) {',
-  '      var v = input.value.trim().toLowerCase();',
-  '      if (v) filters[input.dataset.col] = v;',
-  '    });',
-  '    var cols = Object.keys(filters);',
-  "    document.getElementById('trend-filter-legend').hidden = cols.length === 0;",
-  "    document.getElementById('trend-note').hidden = !(filters.purchaser || filters.type);",
-  '    if (!cols.length) {',
-  '      filteredSeries = null;',
-  '    } else {',
-  '      var subset = payload.items.filter(function (item) {',
-  "        return cols.every(function (c) { return (item[c] || '').indexOf(filters[c]) !== -1; });",
-  '      });',
-  "      document.getElementById('trend-filter-label').textContent =",
-  "        cols.map(function (c) { return LABELS[c] + ' \\u00ab' + filters[c] + '\\u00bb'; }).join(', ');",
-  '      filteredSeries = buildDailySeries(subset, payload.from, payload.to);',
-  '    }',
-  '    draw();',
-  '  }',
-  '  inputs.forEach(function (input) {',
-  "    input.addEventListener('input', update);",
-  "    input.addEventListener('change', update);",
-  '  });',
-  '  update();',
   '}());',
 ].join('\n');
 
@@ -1542,7 +1533,10 @@ const BAR_TOOLTIP_SCRIPT = `
 }());
 `;
 
-const ASSET_JS = SHARED_SCRIPT + '\n' + TREND_SCRIPT + '\n' + BAR_TOOLTIP_SCRIPT;
+// Filtrene på Utvikling-siden brukes med en gang et valg endres.
+const FILTER_SUBMIT_SCRIPT = "document.querySelectorAll('#utvikling-filters select').forEach(function (s) { s.addEventListener('change', function () { s.form.submit(); }); });";
+
+const ASSET_JS = SHARED_SCRIPT + '\n' + TREND_SCRIPT + '\n' + BAR_TOOLTIP_SCRIPT + '\n' + FILTER_SUBMIT_SCRIPT;
 const ASSET_CSS_VERSION = crypto.createHash('sha256').update(ASSET_CSS).digest('hex').slice(0, 10);
 const ASSET_JS_VERSION = crypto.createHash('sha256').update(ASSET_JS).digest('hex').slice(0, 10);
 
@@ -1975,68 +1969,217 @@ function renderArchivePage(avvikList, notifications) {
   return renderShell('archive', 'Arkiv', content);
 }
 
-const SUPPLIER_BARS = 15;
+// De så mange leverandørene med flest avvik får stolpe med en gang; resten
+// ligger under «Vis alle».
+const SUPPLIER_BARS = 10;
 
-// Åpne avvik fordelt på leverandør, størst først. De SUPPLIER_BARS største
-// får hver sin stolpe, resten slås sammen til "Andre"; tabellvisningen under
-// har alle leverandørene. Én serie, så ingen legende - tittelen sier hva
-// stolpene viser, og verdien står ved stolpespissen.
-function renderSupplierChart(openList) {
-  const counts = new Map();
-  for (const a of openList) {
-    const name = supplierLabel(a);
-    counts.set(name, (counts.get(name) || 0) + 1);
-  }
-  const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0], 'no'));
-  const bars = sorted.slice(0, SUPPLIER_BARS);
-  const rest = sorted.slice(SUPPLIER_BARS);
-  // "Andre" er flere leverandører og kan ikke filtreres som én, så den stolpen
-  // er ikke en lenke.
-  if (rest.length) bars.push([`Andre (${rest.length} leverandører)`, rest.reduce((sum, [, c]) => sum + c, 0), false]);
-  const total = openList.length;
-  const max = Math.max(1, ...bars.map(([, c]) => c));
+const UTVIKLING_DEFAULTS = { periode: '90', visning: 'apne' };
+const UTVIKLING_MODES = {
+  apne: { label: 'Åpne avvik', chartTitle: 'Åpne avvik', supplierTitle: 'Åpne avvik per leverandør', axis: 'åpne avvik' },
+  registrert: { label: 'Registrerte avvik', chartTitle: 'Registrerte avvik', supplierTitle: 'Registrerte avvik per leverandør', axis: 'registrerte avvik' },
+  lukket: { label: 'Lukkede avvik', chartTitle: 'Lukkede avvik', supplierTitle: 'Lukkede avvik per leverandør', axis: 'lukkede avvik' },
+};
+const UTVIKLING_STATUS = { apne: 'Åpne', lukket: 'Lukkede' };
 
-  const rows = bars
-    .map(([name, count, linkable = true]) => {
-      const pct = (count / max) * 100;
-      const share = total ? Math.round((count / total) * 100) : 0;
-      const attrs = `class="bar-row${linkable ? ' bar-row-link' : ''}" data-label="${escapeHtml(name)}" data-value="${count}" data-share="${share}"`;
-      const inner = `
+// Ukjente eller manglende verdier faller tilbake til standarden, så en
+// håndskrevet URL aldri gir en tom side.
+function parseUtviklingQuery(query = {}) {
+  const pick = (v) => (Array.isArray(v) ? v[0] : v) || '';
+  const periode = pick(query.periode);
+  const visning = pick(query.visning);
+  const status = pick(query.status);
+  return {
+    periode: PERIODS[periode] ? periode : UTVIKLING_DEFAULTS.periode,
+    visning: UTVIKLING_MODES[visning] ? visning : UTVIKLING_DEFAULTS.visning,
+    status: UTVIKLING_STATUS[status] ? status : '',
+    avdeling: pick(query.avdeling),
+    leverandor: pick(query.leverandor),
+  };
+}
+
+function utviklingUrl(state, overrides = {}) {
+  const next = { ...state, ...overrides };
+  const params = new URLSearchParams();
+  Object.keys(next).forEach((key) => {
+    if (next[key] && next[key] !== UTVIKLING_DEFAULTS[key]) params.set(key, next[key]);
+  });
+  const qs = params.toString();
+  return `/utvikling${qs ? '?' + qs : ''}`;
+}
+
+// Runde akseverdier (1, 2, 5, 10, 20, 50 ...) gir få, lesbare tall.
+function niceStep(max) {
+  const raw = Math.max(1, max) / 5;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const unit = [1, 2, 5, 10].find((m) => m * pow >= raw) * pow;
+  return Math.max(1, unit);
+}
+
+function formatNoDate(iso) {
+  return new Date(iso + 'T00:00:00Z').toLocaleDateString('no-NO', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+function renderBarAxis(top, step, axisLabel) {
+  const ticks = [];
+  for (let v = 0; v <= top; v += step) ticks.push(v);
+  const spans = ticks.map((v) => `<span class="bar-axis-tick" style="left:${((v / top) * 100).toFixed(2)}%">${v}</span>`).join('');
+  return `<li class="bar-axis" aria-hidden="true"><span class="bar-axis-title">Antall ${escapeHtml(axisLabel)}</span><span class="bar-axis-track">${spans}</span></li>`;
+}
+
+function renderBarRow([name, count], { top, total, link }) {
+  const pct = (count / top) * 100;
+  const share = total ? Math.round((count / total) * 100) : 0;
+  const attrs = `class="bar-row${link ? ' bar-row-link' : ''}" data-label="${escapeHtml(name)}" data-value="${count}" data-share="${share}"`;
+  const inner = `
         <span class="bar-label" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
         <span class="bar-track"><span class="bar-fill" style="width:${pct.toFixed(2)}%"></span><span class="bar-value" style="left:${pct.toFixed(2)}%">${count}</span></span>`;
-      // Stolpen er en lenke til Åpne avvik filtrert på leverandøren.
-      return linkable
-        ? `<li><a ${attrs} href="/?leverandor=${encodeURIComponent(name)}" aria-label="${escapeHtml(name)}: ${count} åpne avvik, vis dem">${inner}</a></li>`
-        : `<li><div ${attrs} tabindex="0">${inner}</div></li>`;
-    })
-    .join('');
-  const tableRows = sorted
-    .map(([name, count]) => `<tr><td>${escapeHtml(name)}</td><td>${count}</td></tr>`)
-    .join('');
+  // Stolpen er en lenke til Åpne avvik filtrert på leverandøren (bare for åpne avvik).
+  return link
+    ? `<li><a ${attrs} href="/?leverandor=${encodeURIComponent(name)}" aria-label="${escapeHtml(name)}: ${count} åpne avvik, vis dem">${inner}</a></li>`
+    : `<li><div ${attrs} tabindex="0">${inner}</div></li>`;
+}
+
+// Avvik fordelt på leverandør, flest først. De SUPPLIER_BARS største vises med
+// en gang, alle ligger under «Vis alle». Samme akse (0 til et rundt tall)
+// brukes for begge, så stolpene kan sammenlignes på tvers.
+function renderSupplierChart(items, { title, axisLabel, periodLabel, link }) {
+  const counts = new Map();
+  for (const item of items) counts.set(item.supplierName, (counts.get(item.supplierName) || 0) + 1);
+  const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0], 'no'));
+  const total = items.length;
+  const biggest = sorted.length ? sorted[0][1] : 1;
+  const step = niceStep(biggest);
+  const top = Math.max(step, Math.ceil(biggest / step) * step);
+  const axis = renderBarAxis(top, step, axisLabel);
+  const list = (entries) =>
+    `<ul class="bar-list bar-chart" style="--ticks:${top / step}" aria-label="Antall ${escapeHtml(axisLabel)} per leverandør">${axis}${entries.map((e) => renderBarRow(e, { top, total, link })).join('')}</ul>`;
+  const head = sorted.slice(0, SUPPLIER_BARS);
+  const hasMore = sorted.length > SUPPLIER_BARS;
+  const tableRows = sorted.map(([name, count]) => `<tr><td>${escapeHtml(name)}</td><td>${count}</td></tr>`).join('');
 
   return `
     <section id="supplier-section">
       <div class="bf-card supplier-card"><div class="bf-card-content">
-        <span class="trend-title">Åpne avvik per leverandør</span>
-        <p class="chart-sub">${total} åpne avvik fordelt på ${sorted.length} leverandører${rest.length ? ` (de ${SUPPLIER_BARS} største vises, resten samlet under «Andre»)` : ''}.</p>
-        ${total ? `<ul class="bar-list bar-chart" aria-label="Antall åpne avvik per leverandør">${rows}</ul>` : '<p class="chart-sub">Ingen åpne avvik.</p>'}
-        <details class="chart-table">
+        <h2>${escapeHtml(title)}</h2>
+        <p class="chart-sub">${total} ${escapeHtml(axisLabel)} fordelt på ${sorted.length} leverandører · ${escapeHtml(periodLabel)}${hasMore ? ` · de ${SUPPLIER_BARS} største vises` : ''}</p>
+        ${total ? list(head) : '<p class="chart-sub">Ingen avvik for valgene dine.</p>'}
+        ${hasMore ? `<details class="supplier-more"><summary class="bf-link">Vis alle ${sorted.length} leverandører</summary>${list(sorted)}</details>` : ''}
+        ${total ? `<details class="chart-table">
           <summary class="bf-link">Vis som tabell</summary>
           <table class="bf-table">
             <thead><tr><th>Leverandør</th><th>Antall avvik</th></tr></thead>
             <tbody>${tableRows}</tbody>
           </table>
-        </details>
+        </details>` : ''}
       </div></div>
     </section>`;
 }
 
-function renderUtviklingPage(avvikList) {
-  const { open, resolved } = splitAvvik(avvikList);
+function renderUtviklingFilters(state, options, range) {
+  const link = (label, overrides, current) =>
+    `<a href="${escapeHtml(utviklingUrl(state, overrides))}"${current ? ' aria-current="true"' : ''}>${escapeHtml(label)}</a>`;
+  const periods = Object.entries(PERIODS)
+    .map(([key, label]) => link(label, { periode: key }, key === state.periode))
+    .join('');
+  const modes = Object.entries(UTVIKLING_MODES)
+    .map(([key, m]) => link(m.label, { visning: key }, key === state.visning))
+    .join('');
+  const select = (name, label, current, values, allLabel) =>
+    `<label>${label}<select name="${name}"><option value="">${allLabel}</option>${values
+      .map(([value, text]) => `<option value="${escapeHtml(value)}"${value === current ? ' selected' : ''}>${escapeHtml(text)}</option>`)
+      .join('')}</select></label>`;
+  const chip = (label, value, clearOverrides, clearLabel) =>
+    `<span class="filter-chip"><span>${label}: <strong>${escapeHtml(value)}</strong></span>${
+      clearOverrides ? `<a href="${escapeHtml(utviklingUrl(state, clearOverrides))}" aria-label="${escapeHtml(clearLabel)}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></a>` : ''
+    }</span>`;
+
+  const chips = [
+    chip('Periode', `${PERIODS[state.periode]} (${formatNoDate(range.from)} – ${formatNoDate(range.to)})`,
+      state.periode !== UTVIKLING_DEFAULTS.periode ? { periode: UTVIKLING_DEFAULTS.periode } : null, 'Tilbakestill periode'),
+    state.avdeling && chip('Avdeling', state.avdeling, { avdeling: '' }, 'Fjern avdelingsfilter'),
+    state.leverandor && chip('Leverandør', state.leverandor, { leverandor: '' }, 'Fjern leverandørfilter'),
+    state.status && chip('Status', UTVIKLING_STATUS[state.status], { status: '' }, 'Fjern statusfilter'),
+  ].filter(Boolean);
+  const hasFilters = Boolean(state.avdeling || state.leverandor || state.status);
+  const reset = hasFilters
+    ? `<a class="bf-link" href="${escapeHtml(utviklingUrl(state, { avdeling: '', leverandor: '', status: '' }))}">Nullstill filtre</a>`
+    : '';
+
+  return `
+    <section class="bf-card" aria-label="Filtre"><div class="bf-card-content filter-panel">
+      <div class="filter-group"><span class="filter-group-label">Periode</span><nav class="segmented" aria-label="Periode">${periods}</nav></div>
+      <div class="filter-group"><span class="filter-group-label">Viser</span><nav class="segmented" aria-label="Hva grafene viser">${modes}</nav></div>
+      <form method="get" action="/utvikling" class="filter-selects" id="utvikling-filters">
+        <input type="hidden" name="periode" value="${escapeHtml(state.periode)}">
+        <input type="hidden" name="visning" value="${escapeHtml(state.visning)}">
+        ${select('avdeling', 'Avdeling', state.avdeling, options.departments.map((d) => [d, d]), 'Alle avdelinger')}
+        ${select('leverandor', 'Leverandør', state.leverandor, options.suppliers.map((d) => [d, d]), 'Alle leverandører')}
+        ${select('status', 'Status', state.status, Object.entries(UTVIKLING_STATUS), 'Alle statuser')}
+        <noscript><button type="submit" class="bf-button">Bruk filtre</button></noscript>
+      </form>
+      <div class="active-filters" aria-label="Aktive filtre"><span class="filter-group-label">Aktive filtre</span>${chips.join('')}${reset}</div>
+    </div></section>`;
+}
+
+function renderUtviklingPage(avvikList, query = {}, today = new Date().toISOString().slice(0, 10)) {
+  const state = parseUtviklingQuery(query);
+  const range = periodRange(state.periode, today);
+  const mode = UTVIKLING_MODES[state.visning];
+  const allItems = buildChartItems(avvikList, today);
+  const options = {
+    departments: [...new Set(allItems.map((i) => i.departmentName))].sort((a, b) => a.localeCompare(b, 'no')),
+    suppliers: [...new Set(allItems.map((i) => i.supplierName))].sort((a, b) => a.localeCompare(b, 'no')),
+  };
+  const filters = { department: state.avdeling, supplier: state.leverandor, status: state.status, from: range.from, to: range.to };
+  const select = (visning) => selectChartItems(allItems, { ...filters, mode: visning });
+
+  const days = Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86400000) + 1;
+  const bucketDays = state.visning !== 'apne' && days > 45 ? 7 : 1;
+  const chosen = select(state.visning);
+  let series;
+  if (state.visning === 'apne') {
+    // Saldoen per dag regnes av alle som passer filtrene, ikke bare de som er åpne i dag.
+    const pool = allItems.filter(
+      (i) =>
+        (!filters.department || i.departmentName === filters.department) &&
+        (!filters.supplier || i.supplierName === filters.supplier) &&
+        (!filters.status || (filters.status === 'lukket') === i.resolved)
+    );
+    series = buildDailySeries(pool, range.from, range.to);
+  } else {
+    series = buildEventSeries(chosen, state.visning === 'registrert' ? 'start' : 'end', range.from, range.to, bucketDays);
+  }
+
+  const periodLabel = `${PERIODS[state.periode]} · ${formatNoDate(range.from)} – ${formatNoDate(range.to)}`;
+  const unit = state.visning === 'apne' ? 'saldo per dag' : bucketDays > 1 ? 'per uke' : 'per dag';
+  const notes = [];
+  if (range.clamped) notes.push(`Historikken starter ${formatNoDate(CHART_FROM)}, så perioden er kortere enn valgt.`);
+  if (state.visning !== 'apne') notes.push('Registrert = første dag avviket teller (21 dager etter mottak). Lukket = dagen det ble løst.');
+  const kpi = (visning, label) => `
+      <a class="kpi" href="${escapeHtml(utviklingUrl(state, { visning }))}"${visning === state.visning ? ' aria-current="true"' : ''}>
+        <div class="bf-card"><div class="bf-card-content">
+          <div class="kpi-number">${select(visning).length}</div>
+          <div class="kpi-label">${escapeHtml(label)}</div>
+        </div></div>
+      </a>`;
+
   const content = `
     <div class="utvikling-page">
-      <div class="utvikling-trend">${renderTrendSection([...open, ...resolved])}</div>
-      ${renderSupplierChart(open)}
+      ${renderUtviklingFilters(state, options, range)}
+      <div class="kpis">
+        ${kpi('apne', `Åpne avvik per ${formatNoDate(range.to)}`)}
+        ${kpi('registrert', 'Registrert i perioden')}
+        ${kpi('lukket', 'Lukket i perioden')}
+      </div>
+      <div class="utvikling-trend">${renderTrendSection({
+        series,
+        mode: state.visning,
+        bucketDays,
+        title: `${mode.chartTitle} (${unit})`,
+        periodLabel,
+        note: notes.join(' '),
+      })}</div>
+      ${renderSupplierChart(chosen, { title: mode.supplierTitle, axisLabel: mode.axis, periodLabel, link: state.visning === 'apne' })}
     </div>`;
   return renderShell('utvikling', 'Utvikling', content);
 }
