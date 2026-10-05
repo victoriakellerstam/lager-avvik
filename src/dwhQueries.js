@@ -29,6 +29,35 @@ async function withPool(run) {
   }
 }
 
+// The lookup queries below used to read whole tables (medius_invoice_lines is
+// ~300k rows, fetchMediusLinks' join ~520k) to find matches for the ~80 avvik
+// a sync actually has - every result set was then held in memory at once and
+// filled Node's 512 MB heap ("JavaScript heap out of memory", ~60 s after
+// startup). Each one now takes the keys of the avvik it is matched against
+// and filters in SQL. keys === undefined keeps the old unfiltered read; an
+// empty list returns nothing without a round trip.
+function keyList(keys) {
+  const unique = new Set(
+    keys.filter((k) => k !== null && k !== undefined && k !== '').map((k) => String(k).trim())
+  );
+  return JSON.stringify([...unique]);
+}
+
+function keyFilter(column, keys) {
+  if (keys === undefined) return '1 = 1';
+  // Trimmed on both sides: avvikSync.js matches these values trimmed and
+  // case-insensitively, so stray whitespace must not hide a match here.
+  return `LTRIM(RTRIM(${column})) COLLATE Danish_Norwegian_CI_AS IN (SELECT LTRIM(RTRIM(j.[value])) COLLATE Danish_Norwegian_CI_AS FROM OPENJSON(@keys) AS j)`;
+}
+
+function withKeys(request, keys) {
+  return keys === undefined ? request : request.input('keys', sql.NVarChar(sql.MAX), keyList(keys));
+}
+
+function hasNoKeys(keys) {
+  return keys !== undefined && keys.length === 0;
+}
+
 // The single ground-truth query (supplied directly by the user) that does
 // everything the old dwhQueries.js/scenario.js/purchaser.js/avvikSync.js
 // pipeline was reimplementing in JS: PO-nummer derivation, the >21-days-
@@ -914,9 +943,10 @@ async function fetchDepartments() {
 // avvikSync.js's pickBestMediusInvoice can prioritize deterministically and
 // stay unit-testable; a plain ORDER BY in SQL would encode the same
 // priority but couldn't be exercised without a live dwh connection.
-async function fetchMediusLinks() {
+async function fetchMediusLinks(poNumbers) {
+  if (hasNoKeys(poNumbers)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), poNumbers).query(`
       SELECT
         mil.visma_purchase_order,
         mil.article_code,
@@ -930,6 +960,7 @@ async function fetchMediusLinks() {
         ON mih.visma_purchase_order = mil.visma_purchase_order
        AND mih.supplier_id = mil.supplier_id
       WHERE mih.medius_link IS NOT NULL
+        AND ${keyFilter('mil.visma_purchase_order', poNumbers)}
     `);
     return result.recordset;
   });
@@ -947,9 +978,10 @@ async function fetchMediusLinks() {
 // join found nothing, while this direct/bridge match did). Mirrors those same
 // two CTEs, unioned since avvikSync.js only needs one PO+supplier-keyed
 // candidate pool from them, not which path each came from.
-async function fetchMediusCostInvoiceLinks() {
+async function fetchMediusCostInvoiceLinks(poNumbers) {
+  if (hasNoKeys(poNumbers)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), poNumbers).query(`
       SELECT
         ih.visma_purchase_order,
         ih.supplier_id,
@@ -961,6 +993,7 @@ async function fetchMediusCostInvoiceLinks() {
       WHERE ih.invoice_type = 'Non-PO invoice'
         AND ih.visma_purchase_order IS NOT NULL
         AND ih.medius_link IS NOT NULL
+        AND ${keyFilter('ih.visma_purchase_order', poNumbers)}
 
       UNION ALL
 
@@ -976,6 +1009,7 @@ async function fetchMediusCostInvoiceLinks() {
         ON ih.document_id = moc.document_id
       WHERE moc.visma_purchase_order IS NOT NULL
         AND ih.medius_link IS NOT NULL
+        AND ${keyFilter('moc.visma_purchase_order', poNumbers)}
     `);
     return result.recordset;
   });
@@ -997,9 +1031,10 @@ async function fetchMediusCostInvoiceLinks() {
 // available here (no reversal/voucher reference on this table) - see the
 // investigation in avvikSync.js. Positive rows are therefore only ever added
 // to total_quantity, never subtracted back out of either category.
-async function fetchStockMovementBreakdownByLot() {
+async function fetchStockMovementBreakdownByLot(lotNumbers) {
+  if (hasNoKeys(lotNumbers)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), lotNumbers).query(`
       SELECT
           sh.lot_number,
           SUM(CASE WHEN sh.quantity > 0 THEN sh.quantity ELSE 0 END) AS total_quantity,
@@ -1007,6 +1042,7 @@ async function fetchStockMovementBreakdownByLot() {
           ABS(SUM(CASE WHEN sh.quantity < 0 AND sh.type_of_change IN (4, 5, 1040, 3020, 3030, 3040, 3130) THEN sh.quantity ELSE 0 END)) AS resold_quantity
       FROM [dwh].[workplace].[stock_history] AS sh
       WHERE sh.lot_number IS NOT NULL
+        AND ${keyFilter('CONVERT(varchar(50), sh.lot_number)', lotNumbers)}
       GROUP BY sh.lot_number
     `);
     return result.recordset;
@@ -1025,9 +1061,10 @@ async function fetchStockMovementBreakdownByLot() {
 // charge deviation", "Total amount deviation", "Quantity deviation", "Unit
 // price deviation", "Line amount deviation" (see src/invoiceDeviations.js for
 // the Norwegian descriptions used in the email).
-async function fetchOrderDeviations() {
+async function fetchOrderDeviations(orderNumbers) {
+  if (hasNoKeys(orderNumbers)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), orderNumbers).query(`
       SELECT
         purchase_order,
         article_code,
@@ -1035,6 +1072,7 @@ async function fetchOrderDeviations() {
         document_number
       FROM [dwh].[finance].[medius_order_deviations]
       WHERE deviation_name IS NOT NULL
+        AND ${keyFilter('purchase_order', orderNumbers)}
     `);
     return result.recordset;
   });
@@ -1045,9 +1083,10 @@ async function fetchOrderDeviations() {
 // display-only "ordrelinje" card showing what was actually ordered/received/
 // connected so far. purchase_order + article_code is the join key back to an
 // avvik row's own supplier_order_number + article_number (see avvikSync.js).
-async function fetchMediusOrderLines() {
+async function fetchMediusOrderLines(orderNumbers) {
+  if (hasNoKeys(orderNumbers)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), orderNumbers).query(`
       SELECT
         purchase_order,
         article_code,
@@ -1064,6 +1103,7 @@ async function fetchMediusOrderLines() {
         received_not_connected_quantity,
         received_not_connected_amount
       FROM [dwh].[finance].[medius_order_lines]
+      WHERE ${keyFilter('purchase_order', orderNumbers)}
     `);
     return result.recordset;
   });
@@ -1077,9 +1117,10 @@ async function fetchMediusOrderLines() {
 // article_number + supplier number (see invoiceSuggestions.js); whether
 // visma_purchase_order also matches the order line's reference_id decides
 // strong vs. weak suggestion strength there.
-async function fetchUnconnectedInvoiceLines() {
+async function fetchUnconnectedInvoiceLines(articleCodes) {
+  if (hasNoKeys(articleCodes)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), articleCodes).query(`
       SELECT
         invoice_number,
         visma_purchase_order,
@@ -1096,8 +1137,9 @@ async function fetchUnconnectedInvoiceLines() {
         quantity_not_connected_to_purchase_order_line,
         amount_not_connected_to_purchase_order_line
       FROM [dwh].[finance].[medius_invoice_lines]
-      WHERE connection_status = 'Empty'
-         OR quantity_not_connected_to_purchase_order_line > 0
+      WHERE (connection_status = 'Empty'
+         OR quantity_not_connected_to_purchase_order_line > 0)
+        AND ${keyFilter('article_code', articleCodes)}
     `);
     return result.recordset;
   });
@@ -1115,9 +1157,10 @@ async function fetchUnconnectedInvoiceLines() {
 // sometimes even with different invoice_type values) - avvikSync.js keeps
 // only the Archived one (invoiceSuggestions.js's pickArchivedInvoiceHead); a
 // candidate with no Archived row at all is never suggested.
-async function fetchMediusInvoiceHeadByNumber() {
+async function fetchMediusInvoiceHeadByNumber(invoiceNumbers) {
+  if (hasNoKeys(invoiceNumbers)) return [];
   return withPool(async (pool) => {
-    const result = await pool.request().query(`
+    const result = await withKeys(pool.request(), invoiceNumbers).query(`
       SELECT
         invoice_number,
         invoice_type,
@@ -1128,6 +1171,7 @@ async function fetchMediusInvoiceHeadByNumber() {
         document_id
       FROM [dwh].[finance].[medius_invoice_head]
       WHERE medius_link IS NOT NULL
+        AND ${keyFilter('invoice_number', invoiceNumbers)}
     `);
     return result.recordset;
   });

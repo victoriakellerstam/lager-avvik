@@ -161,13 +161,21 @@ async function syncAvvikFromDwh() {
   const rows = await dwhQueries.fetchAvvikRows();
   const intilityUsers = await dwhQueries.fetchIntilityUsers();
   const departments = await dwhQueries.fetchDepartments();
-  const mediusLinks = await dwhQueries.fetchMediusLinks();
-  const mediusCostInvoiceLinks = await dwhQueries.fetchMediusCostInvoiceLinks();
-  const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot();
-  const orderDeviations = await dwhQueries.fetchOrderDeviations();
-  const mediusOrderLines = await dwhQueries.fetchMediusOrderLines();
-  const unconnectedInvoiceLines = await dwhQueries.fetchUnconnectedInvoiceLines();
-  const mediusInvoiceHeadRows = await dwhQueries.fetchMediusInvoiceHeadByNumber();
+  // Every lookup below is narrowed in SQL to the keys of the avvik just
+  // fetched (a few dozen) - reading the Medius tables whole (500k+ rows) filled
+  // Node's heap. See dwhQueries.js's keyList.
+  const poNumbers = rows.map((r) => r.po_number);
+  const orderNumbers = rows.map((r) => r.supplier_order_number);
+  const mediusLinks = await dwhQueries.fetchMediusLinks(poNumbers);
+  const mediusCostInvoiceLinks = await dwhQueries.fetchMediusCostInvoiceLinks(poNumbers);
+  const stockMovementByLot = await dwhQueries.fetchStockMovementBreakdownByLot(rows.map((r) => r.lot_number));
+  const orderDeviations = await dwhQueries.fetchOrderDeviations(orderNumbers);
+  const mediusOrderLines = await dwhQueries.fetchMediusOrderLines(orderNumbers);
+  const unconnectedInvoiceLines = await dwhQueries.fetchUnconnectedInvoiceLines(rows.map((r) => r.article_number));
+  // Only invoices that came back as suggestion candidates need a head row.
+  const mediusInvoiceHeadRows = await dwhQueries.fetchMediusInvoiceHeadByNumber(
+    unconnectedInvoiceLines.map((l) => l.invoice_number)
+  );
 
   const emailByFullName = new Map(
     intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.email])
