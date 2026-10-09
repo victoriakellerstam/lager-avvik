@@ -21,6 +21,15 @@ const PORT = process.env.PORT || 8080;
 const MEDIUS_LOGO_PNG = fs.readFileSync(path.join(__dirname, 'assets', 'medius-logo.png'));
 const TICKET_MANAGER_LOGO_PNG = fs.readFileSync(path.join(__dirname, 'assets', 'ticket-manager-logo.png'));
 
+// Decorative illustrations for the info cards on "Åpne avvik" (see
+// dashboard.js's renderOpenAvvikInfoRow), also read once at startup.
+const ILLUSTRATIONS = new Map(
+  ['illustration-handshake.png', 'illustration-highfive.png'].map((file) => [
+    `/assets/${file}`,
+    fs.readFileSync(path.join(__dirname, 'assets', file)),
+  ])
+);
+
 // Seed avvik ids are plain numbers; dwh-synced avvik ids are 16-char hex
 // strings (see avvikSync.js's buildSyntheticId) - store.getAvvik/resolveAvvik/
 // addComment compare ids with ===, so a route param must be parsed back to
@@ -135,6 +144,11 @@ function createServer() {
       if (req.method === 'GET' && pathname === '/assets/medius-logo.png') {
         res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable' });
         return res.end(MEDIUS_LOGO_PNG);
+      }
+
+      if (req.method === 'GET' && ILLUSTRATIONS.has(pathname)) {
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable' });
+        return res.end(ILLUSTRATIONS.get(pathname));
       }
 
       if (req.method === 'GET' && pathname === '/assets/ticket-manager-logo.png') {

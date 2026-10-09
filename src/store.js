@@ -248,6 +248,7 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.invoiceDeviations = fresh.invoiceDeviations;
       existing.invoiceSuggestions = fresh.invoiceSuggestions;
       existing.supplierName = fresh.supplierName;
+      existing.articleName = fresh.articleName;
       existing.projectNumber = fresh.projectNumber;
       existing.receivedAt = fresh.receivedAt;
       if (!existing.purchaserManuallySet) {

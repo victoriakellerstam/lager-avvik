@@ -1170,6 +1170,40 @@ const SHARED_STYLE = `
   .section-header { display: flex; align-items: center; gap: var(--bfs12); margin-bottom: var(--bfs16); }
   .section-header h2 { margin: 0; }
   .section-note { margin: 0 0 var(--bfs12); color: var(--bfc-base-c-dimmed); font-size: var(--bf-font-size-s); }
+  .page-intro { margin-bottom: var(--bfs8); }
+  .page-intro summary { font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+  .page-intro .bf-card-content > :first-child { margin-top: 0; }
+  .page-intro h3 { margin: var(--bfs16) 0 var(--bfs4); font-size: var(--bf-font-size-m); }
+  .page-intro p, .page-intro li, .page-intro dd { font-size: var(--bf-font-size-s); }
+  .page-intro p, .page-intro ul, .page-intro ol { margin: 0 0 var(--bfs8); }
+  .page-intro dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: var(--bfs4) var(--bfs16); }
+  .page-intro dt { font-weight: 600; font-size: var(--bf-font-size-s); }
+  .page-intro dd { margin: 0; color: var(--bfc-base-c-dimmed); }
+  /* Two equal columns spanning the full content width (same as the stats row
+     below); stacked on narrow screens. Type uses Bifrost's scale: h3 for the
+     card titles and h5 (18px) for body text, not the small helper sizes. */
+  .info-row { display: grid; grid-template-columns: 1fr; gap: var(--bfs24); margin-bottom: var(--bfs24); }
+  @media (min-width: 960px) { .info-row { grid-template-columns: 1fr 1fr; } }
+  .info-row .info-box { position: relative; overflow: hidden; margin: 0; border-color: var(--bfc-theme); font-size: var(--bf-font-size-h5); line-height: 1.65; display: flex; align-items: center; gap: var(--bfs16); }
+  .info-row .info-box-text { flex: 1 1 auto; min-width: 0; }
+  .info-row .info-box h2 { margin: 0 0 var(--bfs16); font-size: var(--bf-font-size-h3); line-height: 1.25; }
+  .info-row .info-box p { margin: 0 0 var(--bfs16); }
+  .info-row .info-box ol { margin: 0; }
+  .info-row .info-box .bf-li { margin-bottom: var(--bfs12); }
+  .info-row .info-box .bf-li:last-child { margin-bottom: 0; }
+  .info-row .info-box-text > :last-child { margin-bottom: 0; }
+  .info-row .info-box h2 i, .info-row .info-box strong i { margin-right: var(--bfs8); }
+  .info-row .info-box strong i { color: var(--bfc-theme); }
+  /* Illustration to the right of the text. A soft circle sits behind a figure
+     that breaks out above it, with the legs cropped by the card's bottom edge
+     (overflow hidden). 13.5rem is under the PNGs' native 268px / 348px, so they
+     stay sharp. Hidden on narrow screens. */
+  .info-art { display: none; }
+  @media (min-width: 600px) {
+    .info-art { display: block; flex: 0 0 13.5rem; align-self: stretch; position: relative; margin-block: calc(-1 * var(--bfs24)); margin-right: calc(-1 * var(--bfs8)); min-height: 11rem; }
+    .info-art::before { content: ""; position: absolute; left: 50%; bottom: -1.5rem; width: 11.5rem; aspect-ratio: 1; transform: translateX(-50%); background: var(--bfc-theme-fade); border-radius: var(--bf-radius-full); }
+    .info-art img { position: absolute; left: 50%; bottom: -4.5rem; transform: translateX(-50%); width: 13.5rem; height: auto; }
+  }
   .section-card { background: var(--bfc-base-3); border-radius: var(--bf-radius-m); border: var(--bf-border); overflow: hidden; box-shadow: 0 1px 3px var(--bfc-shadow); }
   .section-card .bf-table { margin: 0; }
   details summary { cursor: pointer; }
@@ -1540,6 +1574,50 @@ const ASSET_JS = SHARED_SCRIPT + '\n' + TREND_SCRIPT + '\n' + BAR_TOOLTIP_SCRIPT
 const ASSET_CSS_VERSION = crypto.createHash('sha256').update(ASSET_CSS).digest('hex').slice(0, 10);
 const ASSET_JS_VERSION = crypto.createHash('sha256').update(ASSET_JS).digest('hex').slice(0, 10);
 
+// Explanatory "Om denne siden" box shown at the top of every page. Static,
+// pre-escaped Norwegian copy - bodyHtml is authored in this file, never user
+// input. Open by default so first-time users see it; it can be collapsed.
+function renderPageIntro(bodyHtml) {
+  return `
+    <details class="page-intro" open>
+      <summary>Om denne siden</summary>
+      <div class="bf-card"><div class="bf-card-content">${bodyHtml}</div></div>
+    </details>`;
+}
+
+const WHAT_IS_AN_AVVIK_HTML = `
+  <p>Et <strong>avvik</strong> oppstår når en ordrelinje har fått status <strong>mottatt</strong> i Visma, uten at den har blitt matchet mot en leverandørfaktura. Så lenge linjen står som mottatt og ikke er matchet, vises den her. Når den blir matchet mot en faktura, forsvinner den fra de åpne avvikene og havner i Arkiv.</p>`;
+
+// Two side-by-side info cards on "Åpne avvik" (stacked on narrow screens).
+// Built from Bifrost's documented Box classes (bf-padding, bf-border,
+// bf-radius-l, bfc-base-2-bg) rather than the deprecated Card; the purple
+// border comes from the page's bf-theme-purple via --bfc-theme.
+function renderOpenAvvikInfoRow() {
+  return `
+    <div class="info-row">
+      <section class="info-box bf-padding bf-border bf-radius-l bfc-base-2-bg" aria-labelledby="info-about-heading">
+        <div class="info-box-text">
+          <h2 id="info-about-heading" class="bf-h3 bfc-theme"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> Om denne siden</h2>
+          <p>Denne siden viser ordrelinjer som har status som mottatt, men ikke er matchet mot en leverandørfaktura. Disse er avvik.</p>
+          <p>Når en linje blir matchet mot en faktura, flyttes den til Arkiv.</p>
+          <p>Her ser du antall avvik, fordelingen per avvikstype og avdeling. Under «Åpne avvik» ser du alle ordrelinjer som krever behandling.</p>
+        </div>
+        <div class="info-art" aria-hidden="true"><img src="/assets/illustration-handshake.png" alt="" width="268" height="261"></div>
+      </section>
+      <section class="info-box bf-padding bf-border bf-radius-l bfc-base-2-bg" aria-labelledby="info-howto-heading">
+        <div class="info-box-text">
+          <h2 id="info-howto-heading" class="bf-h3 bfc-theme"><i class="fa-solid fa-list-check" aria-hidden="true"></i> Slik bruker du siden</h2>
+          <ol class="bf-ol">
+            <li class="bf-li"><strong><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Finn avvik.</strong> Skriv navnet ditt under «Innkjøper» i tabellen. Du kan kombinere med filter på ordre og avvikstype.</li>
+            <li class="bf-li"><strong><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Åpne ordrelinjen.</strong> Trykk på ordren for å se detaljer og anbefalt fremgangsmåte for avvikstypen.</li>
+            <li class="bf-li"><strong><i class="fa-solid fa-comment" aria-hidden="true"></i> Legg inn kommentar eller vedlegg.</strong> Skriv navnet ditt og en kort beskjed, for eksempel «Fakturanummer 12345 er sendt inn til Medius», eller legg ved faktura som vedlegg. Kommentaren blir stående på avviket.</li>
+          </ol>
+        </div>
+        <div class="info-art" aria-hidden="true"><img src="/assets/illustration-highfive.png" alt="" width="348" height="311"></div>
+      </section>
+    </div>`;
+}
+
 function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions } = {}) {
   return `<!DOCTYPE html>
 <html lang="no" class="bf-theme-purple">
@@ -1584,6 +1662,8 @@ function renderOpenAvvikPage(avvikList, notifications) {
     .join('');
 
   const content = `
+    ${renderOpenAvvikInfoRow()}
+
     ${renderStats(open, resolved.length)}
 
     <section id="open-section">
@@ -1649,6 +1729,17 @@ function renderFinancePage(avvikList, notifications) {
   const vismaStatusChangeRows = vismaStatusChangeCases.map((a) => renderFinanceRow(a)).join('');
 
   const content = `
+    ${renderPageIntro(`
+      <p>Denne siden samler saker som <strong>Finance</strong> løser, i stedet for innkjøper. Innkjøpere får ingen e-post om disse.</p>
+      ${WHAT_IS_AN_AVVIK_HTML}
+      <dl>
+        <dt>Spesielle caser - Finance</dt><dd>Varefakturaen er arkivert i Medius, men linjen står likevel som mottatt. Noe stemmer ikke, og Finance må se nærmere på det.</dd>
+        <dt>Løses av Finance – Endre status i Visma</dt><dd>Hele antallet er skrevet ut av lager (eller videresolgt, for kredittkort-lisenskjøp). Finance løser saken ved å endre status i Visma.</dd>
+        <dt>Sakseier ikke funnet</dt><dd>Vi vet ikke hvem som eier saken. Fyll inn riktig innkjøper, så flyttes saken til «Åpne avvik».</dd>
+      </dl>
+      <p>Trykk på en ordre for å se detaljer og informasjon om saken. Du kan også legge igjen en kommentar.</p>
+    `)}
+
     ${renderFinanceStats(financeCases.length, vismaStatusChangeCases.length, noOwnerCases.length)}
 
     <section id="finance-section">
@@ -1825,6 +1916,7 @@ function renderAvvikDetailPage(avvik) {
     renderInfoCard('PO-nummer', avvik.poNumber, avvikTone),
     renderInfoCard('Innkjøpsordrenummer', avvik.orderId, avvikTone),
     renderInfoCard('SKU', avvik.articleNumber, avvikTone),
+    renderInfoCard('Artikkelnavn', avvik.articleName, avvikTone),
     renderInfoCard('Leverandør', avvik.supplierName, avvikTone),
     renderInfoCard('Prosjekt', avvik.projectNumber, avvikTone),
     renderInfoCard('Bestillingsdato', avvik.createdAt ? new Date(avvik.createdAt).toLocaleDateString('no-NO') : null, avvikTone),
@@ -1894,6 +1986,11 @@ function renderAvvikDetailPage(avvik) {
   const content = `
     <a id="back-link" class="back-link" href="/"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Åpne avvik</a>
 
+    ${renderPageIntro(`
+      <p>Her ser du detaljene for én ordrelinje som er mottatt i Visma uten å være matchet mot en leverandørfaktura.</p>
+      <p>Boksene øverst viser nøkkelinformasjon om linjen: PO-nummer, SKU, leverandør, hvor lenge den har ventet og om den er videresolgt eller skrevet ut av lager. Under står en <strong>anbefalt fremgangsmåte</strong> for denne avvikstypen. Følg stegene, og legg igjen en kommentar på avviket i listen når du har gjort noe.</p>
+    `)}
+
     <div class="info-cards">${infoCards}</div>
 
     ${note ? `<section class="detail-page-section">
@@ -1933,6 +2030,13 @@ function renderArchivePage(avvikList, notifications) {
     .join('');
 
   const content = `
+    ${renderPageIntro(`
+      <p>Arkivet er en løpende historikk over avvik som er løst. Nyeste øverst.</p>
+      <p>Et avvik havner her på to måter: ordrelinjen er matchet mot en leverandørfaktura og er ikke lenger mottatt uten match, eller noen har trykket «Marker løst». Datoen under «Løst» er første gang appen så at linjen var borte fra avvikslisten, ikke nødvendigvis den faktiske løsedatoen.</p>
+      <p>Dukker en automatisk arkivert linje opp igjen som avvik, åpnes den igjen av seg selv. Det gjør ikke en sak noen har markert løst manuelt. Der kan bare en person trykke «Gjenåpne». Arkivet fylles opp over tid, fordi det bygger på det appen har sett.</p>
+      <p>Bruk arkivet til å se hva som er gjort tidligere, for eksempel kommentarer og fremgangsmåte på et lignende avvik.</p>
+    `)}
+
     <div class="stats">
       <div class="bf-card"><div class="bf-card-content">
         <div class="stat-number">${resolved.length}</div>

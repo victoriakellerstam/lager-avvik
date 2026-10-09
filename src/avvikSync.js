@@ -354,6 +354,8 @@ async function syncAvvikFromDwh() {
       // orderLine already resolved above for invoice suggestions), not
       // supplier_order_line, per the task's own table mapping.
       supplierName: orderLine ? orderLine.supplier_name : null,
+      // Artikkelnavn key figure - same medius_order_lines row as the supplier.
+      articleName: orderLine ? orderLine.article_name : null,
       // Display-only key figure (shown as the "Prosjekt" card on the detail
       // page). It's also what the classification above keys on to detect an
       // Internbestilling (project_number = 14000, see dwhQueries.js's Combined
