@@ -7,6 +7,7 @@ const store = require('./store');
 const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
+const { getAccessToken } = require('./tdsynnex');
 const { syncAvvikFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
 const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
@@ -251,6 +252,19 @@ if (require.main === module) {
     console.log(`lager-avvik listening on port ${PORT}`);
   });
   startScheduler();
+    // Optional authentication test. Never log credentials or tokens.
+  if (process.env.TD_SYNNEX_TEST_ON_STARTUP === 'true') {
+    getAccessToken()
+      .then(() => {
+        console.log('TD Synnex authentication test: OK');
+      })
+      .catch((err) => {
+        console.warn(
+          `TD Synnex authentication test failed: ${err.message}`
+        );
+      });
+  }
+
 
   // Best-effort: keep the mock-seeded state if the dwh isn't reachable yet
   // (e.g. the link isn't attached in this environment) rather than failing
