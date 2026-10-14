@@ -25,6 +25,25 @@ function getAvvik(id) {
   return avvikList.find((a) => a.id === id) || null;
 }
 
+// Comment threads for customer orders (Kundeordre page), keyed "k<ordrenummer>".
+// They are not avvik, but reuse the avvik comment API and UI, so the comment
+// functions below resolve a thread through getThread() instead of getAvvik().
+// A thread is only stored once its first comment is added, and it outlives the
+// order leaving dwh's open_orders (the comments stay with the case).
+let customerOrderThreads = {};
+
+function isCustomerOrderId(id) {
+  return /^k\d+$/.test(String(id));
+}
+
+// { id, comments } for an avvik or a customer order, or null when there is
+// none. For a customer order without comments yet, comments is a throwaway [].
+function getThread(id) {
+  if (!isCustomerOrderId(id)) return getAvvik(id);
+  if (customerOrderThreads[id]) return { id, comments: customerOrderThreads[id] };
+  return customerOrders.some((o) => `k${o.orderNumber}` === id) ? { id, comments: [] } : null;
+}
+
 // Called once at startup, before the first dwh sync, so the comments/resolved
 // flags of the previous run are already in place by the time that sync merges
 // into the list. A missing or unusable file is not an error - it just means
@@ -47,6 +66,10 @@ function initPersistence() {
       resolvedSource: a.resolvedSource || (a.resolved ? 'manual' : null),
     }));
     notifications = loaded.notifications;
+    customerOrderThreads =
+      loaded.customerOrderComments && typeof loaded.customerOrderComments === 'object' && !Array.isArray(loaded.customerOrderComments)
+        ? loaded.customerOrderComments
+        : {};
     nextNotificationId = notifications.reduce((max, n) => Math.max(max, n.id || 0), 0) + 1;
     console.log(`restored local state from ${persistence.stateFilePath()}: ${avvikList.length} avvik, ${notifications.length} notifications`);
   }
@@ -54,7 +77,7 @@ function initPersistence() {
 
 function persist() {
   if (!persistenceEnabled) return;
-  persistence.saveState({ avvikList, notifications, nextNotificationId });
+  persistence.saveState({ avvikList, notifications, nextNotificationId, customerOrderComments: customerOrderThreads });
 }
 
 // Why each avvik counts as resolved, which decides what a later sync is allowed
@@ -146,23 +169,24 @@ function listNotifications() {
 // attachments: metadata ({ id, name, size }) for files already saved by
 // attachments.js; only present on the comment when there are any.
 function addComment(id, author, text, attachments = []) {
-  const avvik = getAvvik(id);
-  if (!avvik) return null;
+  const thread = getThread(id);
+  if (!thread) return null;
+  if (isCustomerOrderId(id)) thread.comments = customerOrderThreads[id] = customerOrderThreads[id] || [];
   const comment = {
-    id: avvik.comments.length + 1,
+    id: thread.comments.length + 1,
     author,
     text,
     createdAt: new Date().toISOString(),
     ...(attachments.length ? { attachments } : {}),
   };
-  avvik.comments.push(comment);
+  thread.comments.push(comment);
   persist();
   return comment;
 }
 
 function findComment(avvikId, commentId) {
-  const avvik = getAvvik(avvikId);
-  return avvik ? avvik.comments.find((c) => c.id === commentId) || null : null;
+  const thread = getThread(avvikId);
+  return thread ? thread.comments.find((c) => c.id === commentId) || null : null;
 }
 
 // Rettelse av en kommentar (navn og/eller tekst). Tidspunktet for den
@@ -367,6 +391,9 @@ function _reset() {
   avvikList = SEED_AVVIK.map((a) => ({ ...a, comments: (a.comments || []).map((c) => ({ ...c })) }));
   notifications = [];
   nextNotificationId = 1;
+  customerOrderThreads = {};
+  customerOrders = [];
+  lastCustomerOrdersRefreshAt = null;
   persistenceEnabled = false;
 }
 
@@ -377,7 +404,65 @@ function _enablePersistenceAt(filePath) {
   persistenceEnabled = true;
 }
 
+// When the avvik list was last refreshed from dwh. Kept in memory only: the
+// startup sync sets it again on every restart, so it never outlives the data it
+// describes.
+let lastDwhRefreshAt = null;
+
+function markDwhRefreshed(date = new Date()) {
+  lastDwhRefreshAt = date.toISOString();
+}
+
+function getLastDwhRefreshAt() {
+  return lastDwhRefreshAt;
+}
+
+// Open customer orders (Kundeordre page), straight from dwh's open_orders.
+// Nothing local is attached to them yet, so they are replaced wholesale on
+// every refresh and not persisted.
+let customerOrders = [];
+
+// When the customer orders were last refreshed from dwh (shown on the Kundeordre
+// pages); separate from markDwhRefreshed because the two syncs are independent.
+let lastCustomerOrdersRefreshAt = null;
+
+function getLastCustomerOrdersRefreshAt() {
+  return lastCustomerOrdersRefreshAt;
+}
+
+function setCustomerOrders(rows) {
+  lastCustomerOrdersRefreshAt = new Date().toISOString();
+  customerOrders = rows.map((r) => ({
+    orderNumber: String(r.visma_customer_order_number),
+    // dwh's order_at is a plain date at 00:00, so keep just the YYYY-MM-DD part.
+    orderDate: r.order_at ? new Date(r.order_at).toISOString().slice(0, 10) : '',
+    orderStatus: r.order_status === null || r.order_status === undefined ? null : Number(r.order_status),
+    purchaser: r.owner_name || '',
+    department: r.department_name || '',
+    omsUrl: r.oms_order_url || '',
+    // "Sum ordre" (open_orders.total_amount) and "Sum levert" (from the
+    // delivered/remaining quantities of customer_order_lines); null (no lines for the
+    // order) shows as "—".
+    totalAmount: r.total_amount === null || r.total_amount === undefined ? null : Number(r.total_amount),
+    deliveredAmount: r.delivered_amount === null || r.delivered_amount === undefined ? null : Number(r.delivered_amount),
+  }));
+}
+
+// Each order carries its comment thread id and comments for the Kundeordre page.
+function listCustomerOrders() {
+  return customerOrders.map((o) => {
+    const id = `k${o.orderNumber}`;
+    return { ...o, id, comments: customerOrderThreads[id] || [] };
+  });
+}
+
 module.exports = {
+  getLastCustomerOrdersRefreshAt,
+  getThread,
+  setCustomerOrders,
+  listCustomerOrders,
+  markDwhRefreshed,
+  getLastDwhRefreshAt,
   listAvvik,
   getAvvik,
   initPersistence,

@@ -15,7 +15,9 @@ const { getConfig, getSql } = require('./dwh');
 const MAIN_TABLE_CUTOFF_DATE = '2026-01-01';
 const TICKETS_CUTOFF_DATE = '2026-01-01';
 
-async function withPool(run) {
+// options.requestTimeout (ms) overrides the config's per-request timeout for a
+// query that legitimately runs long.
+async function withPool(run, options = {}) {
   // A dedicated ConnectionPool instance, not the module-level sql.connect()/
   // sql.close() global singleton - this function is called many times per
   // refresh, and repeatedly opening/closing the shared global pool is exactly
@@ -24,7 +26,8 @@ async function withPool(run) {
   // a network hiccup on the Link) throws unhandled and crashes the whole
   // process, not just this one request.
   const sql = getSql();
-  const pool = new sql.ConnectionPool(getConfig());
+  const config = options.requestTimeout ? { ...getConfig(), requestTimeout: options.requestTimeout } : getConfig();
+  const pool = new sql.ConnectionPool(config);
   pool.on('error', (err) => {
     console.warn(`dwh connection pool error: ${err.message}`);
   });
@@ -1044,6 +1047,185 @@ async function fetchResolvedHistory() {
   });
 }
 
+// Open customer orders for the Kundeordre page: one row per order, projected
+// to just the columns the table shows. All of open_orders, not cut off at 2026:
+// the page filters on date itself. Tickets are read from CUSTOMER_ORDERS_TICKETS_
+// CUTOFF_DATE (earlier than the avvik query's) so older orders can still be tied
+// to a sakseier.
+//
+// open_orders.owner_name is mostly a system/webshop name ("Intility Webshop",
+// "VismaAPI"), so the sakseier is resolved the same way as for an innkjøpsordre
+// (see fetchAvvikRows): a customer order is tied to its purchase order through
+// supplier_order_line.reference_id, which reads "<PO-nummer>-<kundeordrenr>".
+// With the PO known, a manual order uses its our_ref and any other order the
+// prioritized ticket's sakseier (TICKET_CTES). Orders without a supplier order
+// line, or where no sakseier is found, keep owner_name.
+const CUSTOMER_ORDERS_TICKETS_CUTOFF_DATE = '2019-01-01';
+// Reading tickets back to 2019 and the line tables takes ~40 s, so this query
+// gets more room than the default 60 s request timeout.
+const CUSTOMER_ORDERS_REQUEST_TIMEOUT_MS = 180000;
+
+async function fetchOpenCustomerOrders() {
+  return withPool(async (pool, sql) => {
+    const result = await pool
+      .request()
+      .input('ticketsCutoff', sql.Date, CUSTOMER_ORDERS_TICKETS_CUTOFF_DATE)
+      .query(`
+        WITH SupplierOrders AS
+        (
+            SELECT
+                so.supplier_order_number COLLATE Danish_Norwegian_CI_AS AS supplier_order_number,
+                MAX(
+                    CASE
+                        WHEN NULLIF(LTRIM(RTRIM(so.our_ref)), '') IS NOT NULL
+                         AND LTRIM(RTRIM(so.our_ref)) COLLATE Danish_Norwegian_CI_AS
+                             <> 'Intility Webshop' COLLATE Danish_Norwegian_CI_AS
+                            THEN LTRIM(RTRIM(so.our_ref)) COLLATE Danish_Norwegian_CI_AS
+                    END
+                ) AS manual_order_owner
+            FROM [dwh].[finance].[supplier_order] AS so
+            GROUP BY so.supplier_order_number COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        /* reference_id = "<PO-nummer>-<kundeordrenr>"; kundeordrenr is bak "-" */
+        CustomerRefs AS
+        (
+            SELECT
+                x.customer_order_number,
+                x.po_number,
+                MAX(x.employee_number) AS employee_number,
+                MAX(so.manual_order_owner) AS manual_order_owner
+            FROM
+            (
+                SELECT
+                    LTRIM(RTRIM(CASE WHEN CHARINDEX('-', sol.reference_id) > 0
+                        THEN SUBSTRING(sol.reference_id, CHARINDEX('-', sol.reference_id) + 1, 50) END))
+                        COLLATE Danish_Norwegian_CI_AS AS customer_order_number,
+                    LTRIM(RTRIM(CASE WHEN CHARINDEX('-', sol.reference_id) > 0
+                        THEN LEFT(sol.reference_id, CHARINDEX('-', sol.reference_id) - 1) END))
+                        COLLATE Danish_Norwegian_CI_AS AS po_number,
+                    sol.employee_number,
+                    sol.supplier_order_number COLLATE Danish_Norwegian_CI_AS AS supplier_order_number
+                FROM [dwh].[finance].[supplier_order_line] AS sol
+                WHERE sol.reference_id LIKE '%-%'
+            ) AS x
+            LEFT JOIN SupplierOrders AS so
+                ON so.supplier_order_number = x.supplier_order_number
+            WHERE x.customer_order_number IN
+                (
+                    SELECT CONVERT(varchar(50), oo.visma_customer_order_number)
+                    FROM [dwh].[workplace].[open_orders] AS oo
+                )
+            GROUP BY x.customer_order_number, x.po_number
+        ),
+
+        /*
+        "Sum levert", per customer order, from the order lines:
+        - A line with remaining_quantity = 0 has nothing left to deliver, so all of
+          its amount (total_order_amount) is delivered; that includes the empty
+          lines (ordered 0) that orders already added to the invoice basis have.
+        - A line with something remaining counts its delivered share:
+          total_order_amount * delivered_quantity / ordered_quantity.
+        - remaining_lines counts the lines that still have something to deliver:
+          an order where it is 0 is fully delivered, and the final SELECT then
+          uses the order's own total (Sum ordre) as Sum levert, so the two are
+          always equal for a fully delivered order (the line amounts do not
+          always add up to open_orders' total).
+        An order with no lines at all gets no row, i.e. NULL below.
+        */
+        DeliveredAmounts AS
+        (
+            SELECT
+                LTRIM(RTRIM(cl.order_number)) COLLATE Danish_Norwegian_CI_AS AS customer_order_number,
+                SUM(CASE
+                        WHEN cl.remaining_quantity = 0 THEN cl.total_order_amount
+                        WHEN cl.ordered_quantity <> 0
+                            THEN cl.total_order_amount * cl.delivered_quantity / cl.ordered_quantity
+                        ELSE 0
+                    END) AS delivered_amount,
+                SUM(CASE WHEN cl.remaining_quantity <> 0 THEN 1 ELSE 0 END) AS remaining_lines
+            FROM [dwh].[finance].[customer_order_lines] AS cl
+            WHERE LTRIM(RTRIM(cl.order_number)) COLLATE Danish_Norwegian_CI_AS IN
+                (
+                    SELECT CONVERT(varchar(50), oo.visma_customer_order_number) COLLATE Danish_Norwegian_CI_AS
+                    FROM [dwh].[workplace].[open_orders] AS oo
+                )
+            GROUP BY LTRIM(RTRIM(cl.order_number)) COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        ${TICKET_CTES}
+        Resolved AS
+        (
+            SELECT
+                cr.customer_order_number,
+                CASE
+                    WHEN cr.employee_number > 11
+                     AND cr.manual_order_owner IS NOT NULL
+                        THEN cr.manual_order_owner
+
+                    WHEN cr.employee_number <= 11
+                     AND NULLIF(LTRIM(RTRIM(pt.intility_worker_fullname)), '') IS NOT NULL
+                        THEN LTRIM(RTRIM(pt.intility_worker_fullname))
+                END AS case_owner
+            FROM CustomerRefs AS cr
+            LEFT JOIN PreferredTicket AS pt
+                ON pt.po_number COLLATE Danish_Norwegian_CI_AS
+                 = cr.po_number COLLATE Danish_Norwegian_CI_AS
+        ),
+
+        /*
+        Reserve for orders the reference_id route above can't resolve:
+        open_orders' own webmercs_po_number is a PO number too, so the same
+        prioritized ticket gives a sakseier. avvikSync.js only uses it when the
+        order still has no person as innkjøper.
+        */
+        WebmercsOwners AS
+        (
+            SELECT
+                oo.visma_customer_order_number,
+                NULLIF(LTRIM(RTRIM(pt.intility_worker_fullname)), '') AS po_owner
+            FROM [dwh].[workplace].[open_orders] AS oo
+            INNER JOIN PreferredTicket AS pt
+                ON pt.po_number COLLATE Danish_Norwegian_CI_AS
+                 = LTRIM(RTRIM(oo.webmercs_po_number)) COLLATE Danish_Norwegian_CI_AS
+        )
+
+        SELECT
+            o.visma_customer_order_number,
+            o.order_at,
+            COALESCE(MAX(r.case_owner), o.owner_name) AS owner_name,
+            MAX(wo.po_owner) AS po_owner_name,
+            o.order_status,
+            o.department_name,
+            o.oms_order_url,
+            /* "Sum ordre" */
+            MAX(o.total_amount) AS total_amount,
+            /* "Sum levert" (see DeliveredAmounts) */
+            CASE
+                WHEN MAX(da.remaining_lines) IS NULL THEN NULL
+                WHEN MAX(da.remaining_lines) = 0 THEN MAX(o.total_amount)
+                ELSE MAX(da.delivered_amount)
+            END AS delivered_amount
+        FROM [dwh].[workplace].[open_orders] AS o
+        LEFT JOIN Resolved AS r
+            ON r.customer_order_number = CONVERT(varchar(50), o.visma_customer_order_number)
+        LEFT JOIN WebmercsOwners AS wo
+            ON wo.visma_customer_order_number = o.visma_customer_order_number
+        LEFT JOIN DeliveredAmounts AS da
+            ON da.customer_order_number = CONVERT(varchar(50), o.visma_customer_order_number) COLLATE Danish_Norwegian_CI_AS
+        GROUP BY
+            o.visma_customer_order_number,
+            o.order_at,
+            o.owner_name,
+            o.order_status,
+            o.department_name,
+            o.oms_order_url
+        ORDER BY o.visma_customer_order_number DESC;
+      `);
+    return result.recordset;
+  }, { requestTimeout: CUSTOMER_ORDERS_REQUEST_TIMEOUT_MS });
+}
+
 // Employee directory, used to look up an email address for a resolved
 // purchaser full name (case_owner from fetchAvvikRows).
 // department is also selected here as a fallback department source: some
@@ -1326,6 +1508,7 @@ async function fetchMediusInvoiceHeadByNumber(invoiceNumbers) {
 module.exports = {
   fetchAvvikRows,
   fetchResolvedHistory,
+  fetchOpenCustomerOrders,
   fetchIntilityUsers,
   fetchDepartments,
   fetchMediusLinks,

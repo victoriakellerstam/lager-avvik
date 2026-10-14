@@ -7,11 +7,12 @@ const store = require('./store');
 const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
-const { syncAvvikFromDwh, syncResolvedHistory, resolveDepartmentForPurchaser } = require('./avvikSync');
+const { syncAvvikFromDwh, syncResolvedHistory, syncCustomerOrdersFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
 const attachments = require('./attachments');
 const { ALL_DISCREPANCY_TYPES, UNKNOWN_HISTORY_TYPE } = require('./discrepancyTypes');
-const { renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderUtviklingPage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
+const { buildXlsx } = require('./xlsx');
+const { renderArchiveKundeordrePage, renderKundeordrePage, selectOverdueKundeordre, parseKundeordreView, parseFraDate, filterKundeordre, kundeordreXlsxRows, KUNDEORDRE_XLSX_COLUMNS,renderOpenAvvikPage, renderFinancePage, renderArchivePage, renderUtviklingPage, renderAvvikDetailPage, ASSET_CSS, ASSET_JS } = require('./dashboard');
 
 const PORT = process.env.PORT || 8080;
 
@@ -38,15 +39,38 @@ const ILLUSTRATIONS = new Map(
 // feeds the archive and the trend chart. Sequential, not parallel, for the
 // same heap reason as avvikSync.js's own queries. A history failure never
 // discards the open-avvik result - the open list is what people act on.
-async function refreshFromDwh() {
-  const freshAvvikRows = await syncAvvikFromDwh();
-  const result = store.mergeFromDwh(freshAvvikRows);
+//
+// Kundeordre is a separate data set and never depends on the avvik side: it is
+// refreshed even when the avvik sync fails (and the avvik refresh still reports
+// its error), and a Kundeordre failure keeps the previous list instead of
+// failing the refresh.
+async function refreshCustomerOrders() {
   try {
-    result.history = store.mergeHistoryFromDwh(await syncResolvedHistory());
+    store.setCustomerOrders(await syncCustomerOrdersFromDwh());
+    return store.listCustomerOrders().length;
   } catch (err) {
-    console.warn(`dwh history sync failed, keeping current archive: ${err.message}`);
-    result.history = null;
+    console.warn(`dwh customer orders sync failed, keeping current list: ${err.message}`);
+    return null;
   }
+}
+
+async function refreshFromDwh() {
+  let result;
+  try {
+    const freshAvvikRows = await syncAvvikFromDwh();
+    result = store.mergeFromDwh(freshAvvikRows);
+    store.markDwhRefreshed();
+    try {
+      result.history = store.mergeHistoryFromDwh(await syncResolvedHistory());
+    } catch (err) {
+      console.warn(`dwh history sync failed, keeping current archive: ${err.message}`);
+      result.history = null;
+    }
+  } catch (err) {
+    await refreshCustomerOrders();
+    throw err;
+  }
+  result.customerOrders = await refreshCustomerOrders();
   return result;
 }
 
@@ -161,7 +185,42 @@ function createServer() {
       // fresh error response instead of hitting ERR_HTTP_HEADERS_SENT on an
       // already-started one.
       if (req.method === 'GET' && pathname === '/') {
-        const html = renderOpenAvvikPage(store.listAvvik(), store.listNotifications());
+        const html = renderOpenAvvikPage(store.listAvvik(), store.listNotifications(), store.getLastDwhRefreshAt());
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
+      if (req.method === 'GET' && pathname === '/kundeordre') {
+        const html = renderKundeordrePage(store.listCustomerOrders(), store.getLastCustomerOrdersRefreshAt(), url.searchParams.get('avviksgrense'), { view: 'behandling', fra: url.searchParams.get('fra') });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
+      if (req.method === 'GET' && pathname === '/kundeordre/fakturagrunnlag') {
+        const html = renderKundeordrePage(store.listCustomerOrders(), store.getLastCustomerOrdersRefreshAt(), url.searchParams.get('avviksgrense'), { view: 'fakturagrunnlag', fra: url.searchParams.get('fra') });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(html);
+      }
+
+      if (req.method === 'GET' && pathname === '/kundeordre/excel') {
+        const q = url.searchParams;
+        const view = parseKundeordreView(q.get('visning'));
+        const selected = filterKundeordre(
+          selectOverdueKundeordre(store.listCustomerOrders(), q.get('avviksgrense'), new Date(), view, parseFraDate(q.get('fra'))),
+          { order: q.get('order'), date: q.get('date'), status: q.get('status'), purchaser: q.get('purchaser'), department: q.get('department') }
+        );
+        const file = buildXlsx({ sheetName: 'Kundeordre', columns: KUNDEORDRE_XLSX_COLUMNS, rows: kundeordreXlsxRows(selected) });
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo' }).format(new Date());
+        res.writeHead(200, {
+          'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'Content-Disposition': `attachment; filename="kundeordre-${view === 'fakturagrunnlag' ? 'fakturagrunnlag-' : ''}${today}.xlsx"`,
+          'Cache-Control': 'no-store',
+        });
+        return res.end(file);
+      }
+
+      if (req.method === 'GET' && pathname === '/arkiv/kundeordre') {
+        const html = renderArchiveKundeordrePage();
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }
@@ -254,9 +313,9 @@ function createServer() {
 
       const attachmentMatch = pathname.match(/^\/api\/avvik\/([^/]+)\/attachments\/([^/]+)$/);
       if (req.method === 'GET' && attachmentMatch) {
-        const avvik = store.getAvvik(parseAvvikId(attachmentMatch[1]));
-        const meta = avvik && avvik.comments.flatMap((c) => c.attachments || []).find((a) => a.id === attachmentMatch[2]);
-        const file = meta && attachments.filePath(avvik.id, meta.id);
+        const thread = store.getThread(parseAvvikId(attachmentMatch[1]));
+        const meta = thread && thread.comments.flatMap((c) => c.attachments || []).find((a) => a.id === attachmentMatch[2]);
+        const file = meta && attachments.filePath(thread.id, meta.id);
         if (!file || !fs.existsSync(file)) return sendJson(res, 404, { error: 'attachment not found' });
         // Alltid nedlasting, aldri inline: se attachments.js.
         const ascii = meta.name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '_');
@@ -347,7 +406,7 @@ function createServer() {
           return sendJson(res, 400, { error: 'author or text is too long' });
         }
         const avvikId = parseAvvikId(commentMatch[1]);
-        if (!store.getAvvik(avvikId)) return sendJson(res, 404, { error: 'avvik not found' });
+        if (!store.getThread(avvikId)) return sendJson(res, 404, { error: 'avvik not found' });
         const fileError = attachments.validateFiles(files);
         if (fileError) return sendJson(res, 400, { error: fileError });
         let saved;
@@ -422,4 +481,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createServer };
+module.exports = { createServer, refreshFromDwh };

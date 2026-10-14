@@ -64,6 +64,30 @@ function renderComments(comments, avvikId) {
     .join('');
 }
 
+// The expandable comment cell: summary button, comment list and the add-comment
+// form (with attachments when withFiles). Shared by the avvik rows and the
+// Kundeordre rows; the behavior lives in the delegated handlers in SHARED_SCRIPT.
+function renderCommentDetails(id, comments, summaryHtml, withFiles) {
+  return `
+        <details>
+          ${summaryHtml}
+          <ul class="comments">${renderComments(comments, id)}</ul>
+          <form class="add-comment" data-id="${escapeHtml(id)}">
+            <input type="text" class="bf-input" name="author" placeholder="Ditt navn" required maxlength="100">
+            <input type="text" class="bf-input" name="text" placeholder="Skriv en kommentar" required maxlength="2000">
+            ${withFiles
+              ? `<label class="file-pick">
+              <span>Vedlegg (valgfritt, maks ${MAX_FILES} filer à ${MAX_FILE_BYTES / (1024 * 1024)} MB). Navn og kommentar må fylles ut.</span>
+              <input type="file" name="files" multiple accept="${[...ALLOWED_EXTENSIONS].map((e) => '.' + e).join(',')}">
+            </label>`
+              : ''}
+            <button type="submit" class="bf-button bf-button-small">Legg til</button>
+            <p class="form-error" role="alert" hidden></p>
+          </form>
+        </details>
+      `;
+}
+
 function renderNotificationHistory(avvikId, notifications) {
   const entries = notifications.filter((n) => n.avvikId === avvikId);
   if (!entries.length) return '<li class="empty">Ingen varsler sendt enna.</li>';
@@ -155,7 +179,10 @@ function renderTypeDonut(avvikList) {
 const DEPARTMENT_DONUT_MAX_SLICES = 8;
 const DEPARTMENT_DONUT_NON_FILTERABLE = new Set(['Andre', 'Ukjent']);
 
-function renderDepartmentDonut(avvikList) {
+// skipUnknown leaves out rows without a department instead of counting them as
+// "Ukjent" (the Kundeordre chart is built only from rows that have one).
+function renderDepartmentDonut(avvikList, { skipUnknown = false } = {}) {
+  if (skipUnknown) avvikList = avvikList.filter((a) => a.department);
   const total = avvikList.length;
   const counts = new Map();
   for (const a of avvikList) {
@@ -318,24 +345,7 @@ function renderAvvikRow(
       <td>${formatDaysCell(a, dateField)}</td>
       ${dateCell}
       ${actionCell}
-      <td>
-        <details>
-          ${commentSummary}
-          <ul class="comments">${renderComments(a.comments, a.id)}</ul>
-          <form class="add-comment" data-id="${a.id}">
-            <input type="text" class="bf-input" name="author" placeholder="Ditt navn" required maxlength="100">
-            <input type="text" class="bf-input" name="text" placeholder="Skriv en kommentar" required maxlength="2000">
-            ${openList
-              ? `<label class="file-pick">
-              <span>Vedlegg (valgfritt, maks ${MAX_FILES} filer à ${MAX_FILE_BYTES / (1024 * 1024)} MB). Navn og kommentar må fylles ut.</span>
-              <input type="file" name="files" multiple accept="${[...ALLOWED_EXTENSIONS].map((e) => '.' + e).join(',')}">
-            </label>`
-              : ''}
-            <button type="submit" class="bf-button bf-button-small">Legg til</button>
-            <p class="form-error" role="alert" hidden></p>
-          </form>
-        </details>
-      </td>
+      <td>${renderCommentDetails(a.id, a.comments, commentSummary, openList)}</td>
       ${notifiedCell}
     </tr>`;
 }
@@ -435,9 +445,23 @@ function splitAvvik(avvikList) {
 }
 
 const NAV_ITEMS = [
-  { key: 'open', href: '/', label: 'Åpne avvik', icon: 'fa-list-check' },
+  {
+    label: 'Åpne avvik',
+    icon: 'fa-list-check',
+    children: [
+      { key: 'open', href: '/', label: 'Innkjøpsordre', icon: 'fa-cart-shopping' },
+      { key: 'kundeordre', href: '/kundeordre', label: 'Kundeordre', icon: 'fa-users' },
+    ],
+  },
   { key: 'finance', href: '/finance', label: 'Saker som løses av Finance', icon: 'fa-coins' },
-  { key: 'archive', href: '/arkiv', label: 'Arkiv', icon: 'fa-box-archive' },
+  {
+    label: 'Arkiv',
+    icon: 'fa-box-archive',
+    children: [
+      { key: 'archive', href: '/arkiv', label: 'Innkjøpsordre', icon: 'fa-cart-shopping' },
+      { key: 'archive-kundeordre', href: '/arkiv/kundeordre', label: 'Kundeordre', icon: 'fa-users' },
+    ],
+  },
   { key: 'utvikling', href: '/utvikling', label: 'Utvikling', icon: 'fa-chart-line' },
 ];
 
@@ -460,15 +484,24 @@ function renderTopBar() {
   </header>`;
 }
 
-function renderSideNav(activeKey) {
-  const links = NAV_ITEMS.map((item) => {
-    const isActive = item.key === activeKey;
-    return `<li>
-      <a href="${item.href}"${isActive ? ' class="active" aria-current="page"' : ''}>
+function renderNavLink(item, activeKey) {
+  const isActive = item.key === activeKey;
+  return `<a href="${item.href}"${isActive ? ' class="active" aria-current="page"' : ''}>
         <i class="fa-solid ${item.icon}${isActive ? ' active-icon' : ''}" aria-hidden="true"></i>
         <span>${item.label}</span>
-      </a>
+      </a>`;
+}
+
+function renderSideNav(activeKey) {
+  const links = NAV_ITEMS.map((item) => {
+    if (item.children) {
+      const children = item.children.map((child) => `<li>${renderNavLink(child, activeKey)}</li>`).join('');
+      return `<li>
+      <span class="nav-group-label"><i class="fa-solid ${item.icon}" aria-hidden="true"></i><span>${item.label}</span></span>
+      <ul class="nav-sub">${children}</ul>
     </li>`;
+    }
+    return `<li>${renderNavLink(item, activeKey)}</li>`;
   }).join('');
   return `
   <nav id="side-nav" class="side-nav" aria-label="Hovedmeny"><ul>${links}</ul></nav>
@@ -493,13 +526,27 @@ function renderSettingsPanel() {
   </div>`;
 }
 
-function renderToolbar() {
+// "12.10.26 kl. 11:03", Oslo time regardless of where the server runs.
+function formatLastUpdated(iso) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('nb-NO', {
+      timeZone: 'Europe/Oslo',
+      day: '2-digit', month: '2-digit', year: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(iso)).map((p) => [p.type, p.value])
+  );
+  return `${parts.day}.${parts.month}.${parts.year} kl. ${parts.hour}:${parts.minute}`;
+}
+
+function renderToolbar(lastUpdatedIso) {
+  const lastUpdated = lastUpdatedIso ? `Data sist oppdatert ${formatLastUpdated(lastUpdatedIso)}` : 'Data ikke oppdatert ennå';
   return `
       <div class="toolbar">
         <button type="button" id="test-dwh" class="bf-button">Test tilkobling til dwh</button>
         <span id="test-dwh-result" class="test-dwh-result"></span>
         <button type="button" id="refresh-dwh" class="bf-button">Oppdater fra dwh</button>
         <span id="refresh-dwh-result" class="test-dwh-result"></span>
+        <span id="last-updated" class="last-updated">${escapeHtml(lastUpdated)}</span>
       </div>`;
 }
 
@@ -891,7 +938,7 @@ const SHARED_SCRIPT = `
     });
     // Each section with a filter row is scoped independently, so identically-
     // named filter boxes in different sections/pages don't clobber each other.
-    document.querySelectorAll('#open-section, #finance-section, #no-owner-section, #archive-section').forEach((section) => {
+    document.querySelectorAll('#open-section, #finance-section, #no-owner-section, #archive-section, #kundeordre-section').forEach((section) => {
       const filterInputs = section.querySelectorAll('.filter-input');
       // Pil ved siden av hvert filterfelt som åpner en søkbar rullgardin med
       // alle ulike verdier i kolonnen. Panelet er position: fixed (tabellkortet
@@ -913,7 +960,7 @@ const SHARED_SCRIPT = `
         closeCombo();
         if (wasOpen) return;
         const values = new Set();
-        section.querySelectorAll('.avvik-row').forEach((row) => {
+        section.querySelectorAll('.avvik-row, .kundeordre-row').forEach((row) => {
           const v = (row.getAttribute('data-label-' + input.dataset.col) || '').trim();
           if (v) values.add(v);
         });
@@ -1034,9 +1081,11 @@ const SHARED_SCRIPT = `
         const filters = {};
         filterInputs.forEach((el) => {
           const value = el.value.trim().toLowerCase();
-          if (value) filters[el.dataset.col] = value;
+          // On Kundeordre a lone "-" means "blank" (shown as "—" in the table).
+          const blankAlias = section.id === 'kundeordre-section' && value === '-' && (el.dataset.col === 'purchaser' || el.dataset.col === 'department');
+          if (value) filters[el.dataset.col] = blankAlias ? '\u2014' : value;
         });
-        const rows = section.querySelectorAll('.avvik-row');
+        const rows = section.querySelectorAll('.avvik-row, .kundeordre-row');
         let visibleCount = 0;
         rows.forEach((row) => {
           // Leverandør matches helt (ikke delvis), så "Arrow" ikke treffer "Arrow ECS".
@@ -1046,6 +1095,14 @@ const SHARED_SCRIPT = `
           row.hidden = !match;
           if (match) visibleCount++;
         });
+        const sumFilteredEl = section.id === 'kundeordre-section' ? document.getElementById('kundeordre-sum-filtered') : null;
+        if (sumFilteredEl) {
+          let sum = 0;
+          rows.forEach((row) => { if (!row.hidden) sum += Number(row.dataset.amount || 0); });
+          const active = Object.keys(filters).length > 0;
+          sumFilteredEl.hidden = !active;
+          sumFilteredEl.textContent = active ? 'Filtrert: ' + new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 2 }).format(Math.round(sum * 100) / 100) + ' kr' : '';
+        }
         if (filteredCountEl) {
           const hasFilter = Object.keys(filters).length > 0;
           filteredCountEl.hidden = !hasFilter;
@@ -1082,6 +1139,19 @@ const SHARED_SCRIPT = `
         }
       }
     });
+    // Kundeordre: "Last ned Excel" sends the filter boxes' current values (and
+    // the applied avviksgrense) to the server, which builds the file with the
+    // same matching as applyFilters above.
+    const excelBtn = document.getElementById('download-excel');
+    if (excelBtn) excelBtn.addEventListener('click', () => {
+      const params = new URLSearchParams({ avviksgrense: excelBtn.dataset.limit, visning: excelBtn.dataset.view });
+      if (excelBtn.dataset.fra) params.set('fra', excelBtn.dataset.fra);
+      document.querySelectorAll('#kundeordre-section .filter-input').forEach((el) => {
+        const value = el.value.trim();
+        if (value) params.set(el.dataset.col, value);
+      });
+      window.location.href = '/kundeordre/excel?' + params.toString();
+    });
     // Clicking a name in "Topp 5", a donut legend entry, or a donut segment
     // sets the matching filter box on the open-avvik list and re-runs its
     // existing filter logic (above) via a plain input event - no separate
@@ -1093,11 +1163,11 @@ const SHARED_SCRIPT = `
     document.querySelectorAll('[data-filter-col]').forEach((el) => {
       el.addEventListener('click', () => {
         const input = document.querySelector(
-          '#open-section .filter-input[data-col="' + el.dataset.filterCol + '"]'
+          '#open-section .filter-input[data-col="' + el.dataset.filterCol + '"], #kundeordre-section .filter-input[data-col="' + el.dataset.filterCol + '"]'
         );
         if (!input) return;
         const alreadyActive = input.value.trim().toLowerCase() === el.dataset.filterValue;
-        document.querySelectorAll('#open-section .filter-input').forEach((otherInput) => {
+        document.querySelectorAll('#open-section .filter-input, #kundeordre-section .filter-input').forEach((otherInput) => {
           if (otherInput !== input) otherInput.value = '';
         });
         input.value = alreadyActive ? '' : el.dataset.filterValue;
@@ -1125,6 +1195,9 @@ const SHARED_STYLE = `
   .side-nav { width: 17rem; flex-shrink: 0; background: var(--bfc-base-2); border-right: var(--bf-border); padding: var(--bfs24) var(--bfs16); overflow-y: auto; overflow-x: hidden; transition: width 0.15s ease, padding 0.15s ease; }
   .side-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--bfs4); }
   .side-nav a { display: flex; align-items: center; gap: var(--bfs12); min-height: 44px; padding: var(--bfs8) var(--bfs12); border-radius: var(--bf-radius-s); color: var(--bfc-base-c); text-decoration: none; font-size: var(--bf-font-size-m); white-space: nowrap; }
+  .nav-group-label { display: flex; align-items: center; gap: var(--bfs12); min-height: 44px; padding: var(--bfs8) var(--bfs12); color: var(--bfc-base-c); font-size: var(--bf-font-size-m); white-space: nowrap; }
+  .nav-group-label i { width: 1.1em; text-align: center; color: var(--bfc-base-c-dimmed); }
+  .side-nav ul.nav-sub { padding-left: var(--bfs24); }
   .side-nav a i { width: 1.1em; text-align: center; color: var(--bfc-base-c-dimmed); }
   .side-nav a i.active-icon { color: var(--bfc-theme); }
   .side-nav a:hover { background: var(--bfc-theme-fade); }
@@ -1164,6 +1237,27 @@ const SHARED_STYLE = `
   .page-header-heading { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
   .toolbar { margin-top: var(--bfs16); display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
   .test-dwh-result { font-size: var(--bf-font-size-s); }
+  .threshold-form { display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; margin-bottom: var(--bfs16); }
+  .amount-cell { text-align: right; white-space: nowrap; }
+  .date-filter { flex: 1 1 100%; margin-top: var(--bfs8); }
+  .date-range-box { width: fit-content; max-width: 100%; }
+  .date-hint { margin: var(--bfs8) 0 0; }
+  .date-fields { display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; }
+  .date-input { width: auto; }
+  .range-wrap { position: relative; height: 28px; margin: var(--bfs12) 0 0; cursor: pointer; }
+  .range-track { position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 2px; background: var(--bfc-base-3); }
+  .range-fill { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--bfc-theme); }
+  .range-thumb { position: absolute; top: 5px; width: 18px; height: 18px; box-sizing: border-box; margin: 0; padding: 0; border-radius: 50%; background: var(--bfc-theme); border: 2px solid #fff; cursor: grab; touch-action: none; box-shadow: 0 1px 3px var(--bfc-shadow); }
+  .range-thumb.dragging { cursor: grabbing; }
+  .range-thumb:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .range-ends { display: flex; justify-content: space-between; margin: 0; font-size: var(--bf-font-size-s); color: var(--bfc-base-c); }
+  .kundeordre-actions { display: flex; align-items: center; gap: var(--bfs12); margin-left: auto; flex-wrap: wrap; }
+  .kundeordre-actions .bf-button { text-decoration: none; }
+  .excel-button { display: inline-flex; align-items: center; gap: var(--bfs8); }
+  .threshold-label { font-weight: 600; }
+  .threshold-input { width: 6rem; }
+  .threshold-hint { font-size: var(--bf-font-size-s); color: #fff; }
+  .last-updated { font-size: var(--bf-font-size-s); color: #fff; }
   .test-dwh-result.ok { color: var(--bfc-success); }
   .test-dwh-result.fail { color: var(--bfc-alert); }
   section { margin-top: var(--bfs48); }
@@ -1316,6 +1410,7 @@ const SHARED_STYLE = `
   .top-list { margin: var(--bfs4) 0 0; padding-left: var(--bfs16); font-size: var(--bf-font-size-m); color: var(--bfc-base-c); }
   .top-list li { break-inside: avoid; }
   .donut-card { min-width: 20rem; flex: 1 1 20rem; }
+  .stats-single .donut-card { flex: 0 1 36rem; }
   .donut-wrap { display: flex; align-items: center; gap: var(--bfs16); flex-wrap: wrap; }
   .donut { width: 8rem; height: 8rem; flex-shrink: 0; transform: rotate(0deg); }
   .donut-legend { list-style: none; margin: 0; padding: 0; font-size: var(--bf-font-size-m); flex: 1 1 12rem; color: var(--bfc-base-c); columns: 2 12rem; column-gap: var(--bfs16); }
@@ -1566,7 +1661,143 @@ const BAR_TOOLTIP_SCRIPT = `
 // Filtrene på Utvikling-siden brukes med en gang et valg endres.
 const FILTER_SUBMIT_SCRIPT = "document.querySelectorAll('#utvikling-filters select').forEach(function (s) { s.addEventListener('change', function () { s.form.submit(); }); });";
 
-const ASSET_JS = SHARED_SCRIPT + '\n' + TREND_SCRIPT + '\n' + BAR_TOOLTIP_SCRIPT + '\n' + FILTER_SUBMIT_SCRIPT;
+// Kundeordre date range: a two-handle timeline plus Fra/Til date fields, tied to
+// the avviksgrense field. End date = today - avviksgrense - 1 days, so moving the
+// end handle (or typing a Til date) sets the avviksgrense, and typing an
+// avviksgrense moves the end handle. Releasing a handle applies it at once;
+// typed dates and the avviksgrense wait for "Bruk".
+const KUNDEORDRE_RANGE_SCRIPT = `
+(function () {
+  var box = document.getElementById('date-filter');
+  if (!box) return;
+  var form = box.closest('form');
+  var DAY = 86400000;
+  var THUMB = 18;
+  var min = box.dataset.min;
+  var today = box.dataset.today;
+  var maxDay = Math.round((Date.parse(today) - Date.parse(min)) / DAY) - 1;
+  if (maxDay < 1) maxDay = 1;
+  var wrap = document.getElementById('range-wrap');
+  var startT = document.getElementById('range-start');
+  var endT = document.getElementById('range-end');
+  var fraIn = document.getElementById('fra-date');
+  var tilIn = document.getElementById('til-date');
+  var limitIn = document.getElementById('avviksgrense');
+  var fill = box.querySelector('.range-fill');
+  var state = { s: 0, e: 0 };
+  function dayOf(iso) { return Math.round((Date.parse(iso) - Date.parse(min)) / DAY); }
+  function isoOf(day) { return new Date(Date.parse(min) + day * DAY).toISOString().slice(0, 10); }
+  function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+  function norsk(iso) { return iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4); }
+  function place(thumb, day) {
+    var p = day / maxDay * 100;
+    thumb.style.left = 'calc(' + p + '% - ' + (p / 100 * THUMB) + 'px)';
+    thumb.setAttribute('aria-valuemax', maxDay);
+    thumb.setAttribute('aria-valuenow', day);
+    thumb.setAttribute('aria-valuetext', norsk(isoOf(day)));
+  }
+  function paint() {
+    place(startT, state.s);
+    place(endT, state.e);
+    var ps = state.s / maxDay * 100, pe = state.e / maxDay * 100;
+    fill.style.left = 'calc(' + ps + '% + ' + ((0.5 - ps / 100) * THUMB) + 'px)';
+    fill.style.right = 'calc(' + (100 - pe) + '% - ' + ((0.5 - pe / 100) * THUMB) + 'px)';
+    // When both handles sit on the same spot, the one that can still move away
+    // stays on top: the start handle, unless they are both at the very start.
+    endT.style.zIndex = 4;
+    startT.style.zIndex = (state.s >= state.e && state.s > 0) ? 5 : 3;
+  }
+  function setStart(day) {
+    state.s = clamp(day, 0, state.e);
+    fraIn.value = isoOf(state.s);
+  }
+  function setEnd(day, writeLimit) {
+    state.e = clamp(day, 0, maxDay);
+    tilIn.value = isoOf(state.e);
+    if (writeLimit) limitIn.value = maxDay - state.e;
+    if (state.s > state.e) setStart(state.e);
+  }
+  function submit() { form.requestSubmit(); }
+  function xToDay(clientX) {
+    var r = wrap.getBoundingClientRect();
+    return Math.round(clamp((clientX - r.left - THUMB / 2) / (r.width - THUMB), 0, 1) * maxDay);
+  }
+  function apply(isStart, day) {
+    if (isStart) setStart(day); else setEnd(day, true);
+    paint();
+  }
+
+  // Start values come from the server-rendered fields.
+  state.s = clamp(fraIn.value ? dayOf(fraIn.value) : 0, 0, maxDay);
+  setEnd(maxDay - (Number(limitIn.value) || 0), false);
+  paint();
+
+  function makeDraggable(thumb, isStart) {
+    var timer = null;
+    thumb.addEventListener('pointerdown', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      thumb.setPointerCapture(ev.pointerId);
+      thumb.classList.add('dragging');
+      thumb.focus();
+      function move(e2) { apply(isStart, xToDay(e2.clientX)); }
+      function up() {
+        thumb.removeEventListener('pointermove', move);
+        thumb.removeEventListener('pointerup', up);
+        thumb.removeEventListener('pointercancel', up);
+        thumb.classList.remove('dragging');
+        submit();
+      }
+      thumb.addEventListener('pointermove', move);
+      thumb.addEventListener('pointerup', up);
+      thumb.addEventListener('pointercancel', up);
+    });
+    thumb.addEventListener('keydown', function (ev) {
+      var cur = isStart ? state.s : state.e;
+      var day;
+      if (ev.key === 'ArrowLeft' || ev.key === 'ArrowDown') day = cur - 1;
+      else if (ev.key === 'ArrowRight' || ev.key === 'ArrowUp') day = cur + 1;
+      else if (ev.key === 'PageDown') day = cur - 30;
+      else if (ev.key === 'PageUp') day = cur + 30;
+      else if (ev.key === 'Home') day = 0;
+      else if (ev.key === 'End') day = maxDay;
+      else return;
+      ev.preventDefault();
+      apply(isStart, day);
+      clearTimeout(timer);
+      timer = setTimeout(submit, 700);
+    });
+  }
+  makeDraggable(startT, true);
+  makeDraggable(endT, false);
+
+  // Clicking the line moves the nearer handle there.
+  wrap.addEventListener('pointerdown', function (ev) {
+    if (ev.target === startT || ev.target === endT) return;
+    var day = xToDay(ev.clientX);
+    var useStart = Math.abs(day - state.s) < Math.abs(day - state.e) || (Math.abs(day - state.s) === Math.abs(day - state.e) && day < state.s);
+    apply(useStart, day);
+    submit();
+  });
+
+  fraIn.addEventListener('change', function () {
+    setStart(fraIn.value ? dayOf(fraIn.value) : 0);
+    paint();
+  });
+  tilIn.addEventListener('change', function () {
+    setEnd(tilIn.value ? dayOf(tilIn.value) : state.e, true);
+    paint();
+  });
+  limitIn.addEventListener('input', function () {
+    var limit = Number(limitIn.value);
+    if (limitIn.value === '' || !isFinite(limit)) return;
+    setEnd(maxDay - limit, false);
+    paint();
+  });
+}());
+`;
+
+const ASSET_JS = SHARED_SCRIPT + '\n' + TREND_SCRIPT + '\n' + BAR_TOOLTIP_SCRIPT + '\n' + FILTER_SUBMIT_SCRIPT + '\n' + KUNDEORDRE_RANGE_SCRIPT;
 const ASSET_CSS_VERSION = crypto.createHash('sha256').update(ASSET_CSS).digest('hex').slice(0, 10);
 const ASSET_JS_VERSION = crypto.createHash('sha256').update(ASSET_JS).digest('hex').slice(0, 10);
 
@@ -1600,7 +1831,24 @@ function renderOpenAvvikInfoRow() {
     </div>`;
 }
 
-function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions } = {}) {
+// "Om denne siden" for Kundeordre: same box and illustration as the first card
+// on Innkjøpsordre, on its own for now (no "Slik bruker du siden" card yet).
+function renderKundeordreInfoRow() {
+  return `
+    <div class="info-row">
+      <section class="info-box bf-padding bf-border bf-radius-l bfc-base-2-bg" aria-labelledby="info-about-heading">
+        <div class="info-box-text">
+          <h2 id="info-about-heading" class="bf-h3 bfc-theme"><i class="fa-solid fa-circle-info" aria-hidden="true"></i> Om denne siden</h2>
+          <p>Denne siden viser kundeordre som fremdeles ligger åpne uten å ha blitt viderefakturert til kunde. Disse er avvik og krever behandling.</p>
+          <p>Når kundeordre blir viderefakturert flyttes den til Arkiv.</p>
+          <p>Her ser du antall avvik og fordeling per avdeling. Under «Åpne avvik» ser du alle kundeordre som krever behandling.</p>
+        </div>
+        <div class="info-art" aria-hidden="true"><img src="/assets/illustration-handshake.png" alt="" width="268" height="261"></div>
+      </section>
+    </div>`;
+}
+
+function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions, lastUpdatedIso } = {}) {
   return `<!DOCTYPE html>
 <html lang="no" class="bf-theme-purple">
 <head>
@@ -1625,7 +1873,7 @@ function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions
             <h1>${escapeHtml(title)}</h1>
             ${headerActions || ''}
           </div>
-          ${showToolbar ? renderToolbar() : ''}
+          ${showToolbar ? renderToolbar(lastUpdatedIso) : ''}
         </header>
         ${contentHtml}
       </div>
@@ -1637,7 +1885,7 @@ function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions
 </html>`;
 }
 
-function renderOpenAvvikPage(avvikList, notifications) {
+function renderOpenAvvikPage(avvikList, notifications, lastUpdatedIso) {
   const { open, resolved } = splitAvvik(avvikList);
   const openRows = open
     .map((a) => renderAvvikRow(a, notifications, { showSku: true, showDateColumn: false, showNotifiedColumn: false, openList: true }))
@@ -1679,7 +1927,289 @@ function renderOpenAvvikPage(avvikList, notifications) {
       </div>
     </section>`;
 
-  return renderShell('open', 'Åpne avvik', content, { showToolbar: true });
+  return renderShell('open', 'Åpne avvik - Innkjøpsordre', content, { showToolbar: true, lastUpdatedIso });
+}
+
+// Only ever link out to http(s): the URL comes from dwh and goes into an href.
+function safeHttpUrl(value) {
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// "2026-10-12" -> "12.10.2026"
+function formatOrderDate(isoDate) {
+  const [y, m, d] = isoDate.split('-');
+  return y && m && d ? `${d}.${m}.${y}` : '';
+}
+
+// order_status in dwh's open_orders: 1000/1010 still need handling, 1030 is
+// already on the invoice basis. Any other code has no label.
+function kundeordreStatus(code) {
+  if (code === 1000 || code === 1010) return { label: 'Trenger behandling', pill: 'status-pill-waiting' };
+  if (code === 1030) return { label: 'Lagt til fakturagrunnlag', pill: 'status-pill-updated' };
+  return { label: '', pill: '' };
+}
+
+// What the table shows for a missing innkjøper/avdeling. It is also the filter
+// value for "blank": pick it in the dropdown, or type "-".
+const BLANK_VALUE = '—';
+
+// Kroner with Norwegian grouping, e.g. "18 823" / "1 234,5".
+function formatKroner(amount) {
+  return `${new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 2 }).format(amount)} kr`;
+}
+
+function renderKundeordreRow(o) {
+  const orderDate = formatOrderDate(o.orderDate);
+  const hasAmount = typeof o.totalAmount === 'number';
+  const hasDelivered = typeof o.deliveredAmount === 'number';
+  const status = kundeordreStatus(o.orderStatus);
+  const statusCell = status.label ? `<span class="status-pill ${status.pill}">${status.label}</span>` : '—';
+  const omsUrl = safeHttpUrl(o.omsUrl);
+  const omsCell = omsUrl
+    ? `<a class="bf-link" href="${escapeHtml(omsUrl)}" target="_blank" rel="noopener noreferrer">Åpne i OMS</a>`
+    : '—';
+  return `
+    <tr class="kundeordre-row" data-order="${escapeHtml(o.orderNumber.toLowerCase())}" data-date="${escapeHtml(orderDate)}" data-status="${escapeHtml(status.label.toLowerCase())}" data-purchaser="${escapeHtml((o.purchaser || BLANK_VALUE).toLowerCase())}" data-department="${escapeHtml((o.department || BLANK_VALUE).toLowerCase())}" data-label-order="${escapeHtml(o.orderNumber)}" data-amount="${hasAmount ? o.totalAmount : 0}" data-label-date="${escapeHtml(orderDate)}" data-label-status="${escapeHtml(status.label)}" data-label-purchaser="${escapeHtml(o.purchaser || BLANK_VALUE)}" data-label-department="${escapeHtml(o.department || BLANK_VALUE)}">
+      <td>${escapeHtml(o.orderNumber)}</td>
+      <td>${orderDate || '—'}</td>
+      <td>${o.daysSinceCreated}</td>
+      <td>${statusCell}</td>
+      <td>${o.purchaser ? escapeHtml(o.purchaser) : '—'}</td>
+      <td>${o.department ? escapeHtml(o.department) : '—'}</td>
+      <td class="amount-cell">${hasAmount ? formatKroner(o.totalAmount) : '—'}</td>
+      <td class="amount-cell">${hasDelivered ? formatKroner(o.deliveredAmount) : '—'}</td>
+      <td>${omsCell}</td>
+      <td>${renderCommentDetails(o.id, o.comments, '<summary class="bf-button bf-button-small comment-button">Legg til kommentar</summary>', true)}</td>
+    </tr>`;
+}
+
+// Excel-style icon (green sheet behind a darker square with a white X), drawn
+// here rather than using a bitmap so it stays sharp and works on any theme.
+const EXCEL_ICON_SVG = `<svg class="excel-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="xl-back" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4fb85a"/><stop offset="1" stop-color="#1a6b3a"/></linearGradient>
+    <linearGradient id="xl-front" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#21a366"/><stop offset="1" stop-color="#107c41"/></linearGradient>
+  </defs>
+  <rect x="5" y="1.5" width="17" height="21" rx="3" fill="url(#xl-back)"/>
+  <rect x="12.5" y="1.5" width="9.5" height="7" rx="2.5" fill="#8fdb7a"/>
+  <rect x="1.5" y="8.5" width="13" height="13" rx="2.5" fill="url(#xl-front)"/>
+  <path d="M5 12.2l5.2 6.6M10.2 12.2L5 18.8" stroke="#fff" stroke-width="1.9" stroke-linecap="round" fill="none"/>
+</svg>`;
+
+const DEFAULT_AVVIKSGRENSE_DAYS = 60;
+const MAX_AVVIKSGRENSE_DAYS = 3650;
+
+// The limit comes from the query string; anything that isn't a whole number
+// in range falls back to the default rather than erroring.
+function parseAvviksgrense(raw) {
+  if (!/^\d+$/.test(String(raw ?? ''))) return DEFAULT_AVVIKSGRENSE_DAYS;
+  return Math.min(Number(raw), MAX_AVVIKSGRENSE_DAYS);
+}
+
+// Whole days from orderDate (YYYY-MM-DD) to today's date in Oslo.
+function daysSinceOrder(orderDate, now) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo' }).format(now);
+  return Math.round((Date.parse(today) - Date.parse(orderDate)) / 86400000);
+}
+
+// The two Kundeordre tables, split on order_status: still to be handled
+// (1000/1010) or already added to the invoice basis (1030).
+const KUNDEORDRE_VIEWS = {
+  behandling: { statuses: [1000, 1010], path: '/kundeordre' },
+  fakturagrunnlag: { statuses: [1030], path: '/kundeordre/fakturagrunnlag' },
+};
+
+function parseKundeordreView(raw) {
+  return raw === 'fakturagrunnlag' ? 'fakturagrunnlag' : 'behandling';
+}
+
+// "fra" date from the query string (YYYY-MM-DD), or null.
+function parseFraDate(raw) {
+  const value = String(raw ?? '');
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+function osloToday(now) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Oslo' }).format(now);
+}
+
+function shiftIsoDate(iso, days) {
+  return new Date(Date.parse(iso) + days * 86400000).toISOString().slice(0, 10);
+}
+
+// Only orders older than the limit count as avvik. Each gets daysSinceCreated,
+// and the oldest come first (ties: lowest order number, i.e. created first).
+// view (optional) keeps only the orders whose status belongs to that table;
+// fra (optional, YYYY-MM-DD) drops orders dated before it. The limit and fra
+// together are the date range: orders from fra up to (today - limit - 1 days).
+function selectOverdueKundeordre(customerOrders, rawAvviksgrense, now = new Date(), view = null, fra = null) {
+  const limit = parseAvviksgrense(rawAvviksgrense);
+  return customerOrders
+    .filter((o) => !view || KUNDEORDRE_VIEWS[view].statuses.includes(o.orderStatus))
+    .filter((o) => o.orderDate && (!fra || o.orderDate >= fra))
+    .map((o) => ({ ...o, daysSinceCreated: daysSinceOrder(o.orderDate, now) }))
+    .filter((o) => o.daysSinceCreated > limit)
+    .sort((a, b) => b.daysSinceCreated - a.daysSinceCreated || Number(a.orderNumber) - Number(b.orderNumber));
+}
+
+// The same case-insensitive "contains" match the table's filter boxes apply in
+// the browser (see applyFilters in SHARED_SCRIPT), so the Excel download holds
+// exactly the rows that are on screen. filters: { order, date, purchaser, department }.
+function filterKundeordre(orders, filters) {
+  const wanted = Object.entries(filters)
+    .map(([col, value]) => [col, String(value || '').trim().toLowerCase()])
+    .filter(([, value]) => value)
+    .map(([col, value]) => [col, value === '-' && (col === 'purchaser' || col === 'department') ? BLANK_VALUE : value]);
+  const fieldFor = {
+    order: (o) => o.orderNumber,
+    date: (o) => formatOrderDate(o.orderDate),
+    status: (o) => kundeordreStatus(o.orderStatus).label,
+    purchaser: (o) => o.purchaser || BLANK_VALUE,
+    department: (o) => o.department || BLANK_VALUE,
+  };
+  return orders.filter((o) => wanted.every(([col, value]) => fieldFor[col] && fieldFor[col](o).toLowerCase().includes(value)));
+}
+
+const KUNDEORDRE_XLSX_COLUMNS = [
+  { header: 'Kundeordre', width: 14 },
+  { header: 'Ordredato', width: 14 },
+  { header: 'Dager siden opprettelse', width: 24 },
+  { header: 'Status', width: 26 },
+  { header: 'Innkjøper', width: 28 },
+  { header: 'Avdeling', width: 36 },
+  { header: 'Sum ordre', width: 16 },
+  { header: 'Sum levert', width: 16 },
+  { header: 'OMS-link', width: 60 },
+];
+
+function kundeordreXlsxRows(orders) {
+  return orders.map((o) => [
+    Number(o.orderNumber),
+    o.orderDate ? { date: o.orderDate } : '',
+    o.daysSinceCreated,
+    kundeordreStatus(o.orderStatus).label,
+    o.purchaser,
+    o.department,
+    typeof o.totalAmount === 'number' ? { amount: o.totalAmount } : '',
+    typeof o.deliveredAmount === 'number' ? { amount: o.deliveredAmount } : '',
+    safeHttpUrl(o.omsUrl) || '',
+  ]);
+}
+
+// Orders without any lines in customer_order_lines count as 0 here (rounded to
+// øre to keep float noise out of the total).
+function sumKundeordreAmounts(orders) {
+  return Math.round(orders.reduce((sum, o) => sum + (typeof o.totalAmount === 'number' ? o.totalAmount : 0), 0) * 100) / 100;
+}
+
+// The date-range control: two date fields and a two-handle timeline, kept in
+// step with the avviksgrense field by KUNDEORDRE_RANGE_SCRIPT. The end of the
+// range is today - avviksgrense - 1 days (an order is "older than N days" from
+// N + 1 days back), so dragging the end handle changes the avviksgrense and the
+// other way round. min/today come from the server so the browser agrees on "today".
+function renderDateRangeFilter(minDate, today, limit, fra) {
+  const latest = shiftIsoDate(today, -1);
+  const endDate = shiftIsoDate(today, -(limit + 1));
+  const end = endDate < minDate ? minDate : endDate;
+  const start = fra && fra >= minDate ? fra : minDate;
+  return `
+        <div class="date-filter" id="date-filter" data-min="${minDate}" data-today="${today}">
+          <div class="date-range-box">
+            <div class="date-fields">
+              <label for="fra-date" class="threshold-label">Fra dato</label>
+              <input type="date" id="fra-date" name="fra" class="bf-input date-input" min="${minDate}" max="${latest}" value="${start}">
+              <label for="til-date" class="threshold-label">Til dato</label>
+              <input type="date" id="til-date" class="bf-input date-input" min="${minDate}" max="${latest}" value="${end}">
+            </div>
+            <div class="range-wrap" id="range-wrap">
+              <div class="range-track"><div class="range-fill"></div></div>
+              <button type="button" id="range-start" class="range-thumb" role="slider" aria-label="Startdato" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0"></button>
+              <button type="button" id="range-end" class="range-thumb" role="slider" aria-label="Sluttdato" aria-valuemin="0" aria-valuemax="1" aria-valuenow="1"></button>
+            </div>
+            <div class="range-ends"><span>${formatOrderDate(minDate)}</span><span>${formatOrderDate(latest)}</span></div>
+          </div>
+          <p class="threshold-hint date-hint">Dra i håndtakene, eller skriv inn datoene og trykk «Bruk».</p>
+        </div>`;
+}
+
+function renderKundeordrePage(customerOrders, lastUpdatedIso, rawAvviksgrense, { view = 'behandling', now = new Date(), fra: rawFra = null } = {}) {
+  const limit = parseAvviksgrense(rawAvviksgrense);
+  const fra = parseFraDate(rawFra);
+  const today = osloToday(now);
+  const minDate = customerOrders.reduce((min, o) => (o.orderDate && o.orderDate < min ? o.orderDate : min), today);
+  const overdue = selectOverdueKundeordre(customerOrders, rawAvviksgrense, now, view, fra);
+  const rows = overdue.map(renderKundeordreRow).join('');
+  const isFaktura = view === 'fakturagrunnlag';
+  // The button to the other table keeps the chosen avviksgrense and fra date.
+  const keep = `avviksgrense=${limit}${fra ? `&fra=${fra}` : ''}`;
+  const switchLink = isFaktura
+    ? `<a class="bf-button" href="/kundeordre?${keep}">Kundeordre - trenger behandling</a>`
+    : `<a class="bf-button" href="/kundeordre/fakturagrunnlag?${keep}">Fakturagrunnlag</a>`;
+  const content = `
+    ${isFaktura ? '' : renderKundeordreInfoRow()}
+
+    <div class="stats stats-single">
+      <div class="bf-card"><div class="bf-card-content">
+        <div class="stat-number" id="kundeordre-sum">${formatKroner(sumKundeordreAmounts(overdue))}</div>
+        <div class="stat-label">Sum ordre</div>
+        <div class="stat-sublabel" id="kundeordre-sum-filtered" hidden></div>
+      </div></div>
+      ${renderDepartmentDonut(overdue, { skipUnknown: true })}
+    </div>
+
+    <section id="kundeordre-section">
+      <div class="section-header">
+        <h2>${isFaktura ? 'Lagt til fakturagrunnlag' : 'Åpne avvik'}</h2>
+        <span class="bf-badge bfc-attn-bg">${overdue.length}</span>
+      </div>
+      <form class="threshold-form" method="get" action="${KUNDEORDRE_VIEWS[view].path}">
+        <label for="avviksgrense" class="threshold-label">Avviksgrense</label>
+        <input type="number" id="avviksgrense" name="avviksgrense" class="bf-input threshold-input" min="0" max="${MAX_AVVIKSGRENSE_DAYS}" step="1" value="${limit}" required>
+        <span>dager</span>
+        <button type="submit" class="bf-button">Bruk</button>
+        <span class="threshold-hint">Viser ordrer eldre enn ${limit} dager${fra ? `, fra ${formatOrderDate(fra)}` : ''}.</span>
+        <div class="kundeordre-actions">
+          ${switchLink}
+          <button type="button" id="download-excel" class="bf-button excel-button" data-limit="${limit}" data-view="${view}" data-fra="${fra || ''}">${EXCEL_ICON_SVG}<span>Last ned Excel</span></button>
+        </div>
+        ${renderDateRangeFilter(minDate, today, limit, fra)}
+      </form>
+      <div class="section-card">
+        <table class="bf-table">
+          <thead>
+            <tr><th>Kundeordre</th><th>Ordredato</th><th>Dager siden opprettelse</th><th>Status</th><th>Innkjøper</th><th>Avdeling</th><th class="amount-cell">Sum ordre</th><th class="amount-cell">Sum levert</th><th>OMS-link</th><th>Kommentarer</th></tr>
+            <tr class="filter-row">
+              <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer kundeordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="date" placeholder="Filtrer ordredato..."></th>
+              <th></th>
+              <th><input type="text" class="bf-input filter-input" data-col="status" placeholder="Filtrer status..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
+              <th></th>
+              <th></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
+  return renderShell('kundeordre', isFaktura ? 'Kundeordre - Fakturagrunnlag' : 'Åpne avvik - Kundeordre', content, { showToolbar: true, lastUpdatedIso });
+}
+
+// Tom side for nå: Arkiv for kundeordre fylles ut senere.
+function renderArchiveKundeordrePage() {
+  const content = `
+    <section class="card">
+      <p>Ingen arkiverte kundeordre å vise ennå.</p>
+    </section>`;
+  return renderShell('archive-kundeordre', 'Arkiv – Kundeordre', content);
 }
 
 function renderFinanceStats(financeCount, vismaStatusChangeCount, noOwnerCount) {
@@ -2255,6 +2785,15 @@ function renderUtviklingPage(avvikList, query = {}, today = new Date().toISOStri
 }
 
 module.exports = {
+  renderArchiveKundeordrePage,
+  renderKundeordrePage,
+  selectOverdueKundeordre,
+  parseKundeordreView,
+  parseFraDate,
+  sumKundeordreAmounts,
+  filterKundeordre,
+  kundeordreXlsxRows,
+  KUNDEORDRE_XLSX_COLUMNS,
   renderUtviklingPage,
   renderOpenAvvikPage,
   renderFinancePage,

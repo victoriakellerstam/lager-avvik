@@ -483,7 +483,59 @@ async function resolveDepartmentForPurchaser(name) {
   return (match && match.department) || null;
 }
 
+// open_orders' department_name is often missing or the wrong one for the person
+// who owns the order (e.g. "Logistics" for someone in Procurement & Lifecycle
+// Management). When the resolved sakseier is in the employee directory, their own
+// department is used - the same lookup the avvik sync above uses.
+function fillCustomerOrderDepartments(rows, intilityUsers) {
+  const departmentByFullName = new Map(
+    intilityUsers.map((u) => [normalizeFullNameForMatching(u.user_full_name), u.department])
+  );
+  return rows.map((r) => {
+    // The sakseier's own department from the employee directory comes first
+    // (same rule as the Innkjøpsordre page); the order's department_name is only
+    // the fallback for an owner who isn't in the directory.
+    const department = departmentByFullName.get(normalizeFullNameForMatching(r.owner_name)) || r.department_name;
+    if (!department) return r;
+    // Same department, two names: open_orders uses the newer one, the employee
+    // directory (and so the Innkjøpsordre page) the older one. The directory's
+    // name is the one shown everywhere.
+    return { ...r, department_name: CUSTOMER_ORDER_DEPARTMENT_ALIASES[department] || department };
+  });
+}
+
+const CUSTOMER_ORDER_DEPARTMENT_ALIASES = {
+  'Collaboration & AV Technologies': 'Collaboration Technologies',
+};
+
+// Webshop, service-account and VismaAPI orders have no real sakseier, so the Innkjøper
+// column is left blank for them (the page shows "—") instead of the account name.
+const CUSTOMER_ORDER_NON_PERSON_OWNERS = new Set(['intility webshop', 'ball serviceaccount', 'vismaapi']);
+
+function blankNonPersonOwners(rows) {
+  return rows.map((r) =>
+    CUSTOMER_ORDER_NON_PERSON_OWNERS.has(normalizeFullNameForMatching(r.owner_name)) ? { ...r, owner_name: null } : r
+  );
+}
+
+// An order still without a person as innkjøper after the reference_id route
+// (see fetchOpenCustomerOrders) gets the sakseier of its webmercs PO number, when
+// that resolves to someone. An order that already has a person is never changed.
+function fillOwnersFromPo(rows) {
+  return rows.map((r) => (!r.owner_name && r.po_owner_name ? { ...r, owner_name: r.po_owner_name } : r));
+}
+
+async function syncCustomerOrdersFromDwh() {
+  const rows = await dwhQueries.fetchOpenCustomerOrders();
+  const withOwners = fillOwnersFromPo(blankNonPersonOwners(rows));
+  return fillCustomerOrderDepartments(withOwners, await dwhQueries.fetchIntilityUsers());
+}
+
 module.exports = {
+  fillOwnersFromPo,
+  blankNonPersonOwners,
+  fillCustomerOrderDepartments,
+  syncCustomerOrdersFromDwh,
   syncAvvikFromDwh,
   syncResolvedHistory,
   UNKNOWN_HISTORY_TYPE,
