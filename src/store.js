@@ -273,6 +273,10 @@ function mergeFromDwh(freshAvvikRows, now = new Date()) {
       existing.invoiceSuggestions = fresh.invoiceSuggestions;
       existing.supplierName = fresh.supplierName;
       existing.articleName = fresh.articleName;
+      existing.orderQuantity = fresh.orderQuantity;
+      existing.orderOpenQuantity = fresh.orderOpenQuantity;
+      existing.orderUnitPrice = fresh.orderUnitPrice;
+      existing.orderAmount = fresh.orderAmount;
       existing.projectNumber = fresh.projectNumber;
       existing.receivedAt = fresh.receivedAt;
       if (!existing.purchaserManuallySet) {

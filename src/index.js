@@ -8,6 +8,8 @@ const { runWeeklyJob } = require('./job');
 const { buildEmailPreview } = require('./notify');
 const { testConnection } = require('./dwh');
 const { getAccessToken } = require('./tdsynnex');
+const { refreshTdSynnexInvoices, getInvoicesForAvvik, relevantPos, tdInvoiceBadges, isTdSynnexSupplier, setMediusHeads, setMediusLines, getInvoiceOverview, getMediusHeadsFor, invoiceNumbersToLookUp } = require('./tdsynnexInvoices');
+const { fetchMediusInvoiceHeadByNumber, fetchMediusInvoiceLinesByNumber } = require('./dwhQueries');
 const { syncAvvikFromDwh, syncResolvedHistory, syncCustomerOrdersFromDwh, resolveDepartmentForPurchaser } = require('./avvikSync');
 const { startScheduler } = require('./scheduler');
 const attachments = require('./attachments');
@@ -55,6 +57,31 @@ async function refreshCustomerOrders() {
   }
 }
 
+// TD Synnex invoice numbers are refreshed in the background (the first read takes
+// a few dozen API calls) and independently of the dwh syncs; it logs its own result.
+function startTdSynnexRefresh() {
+  return refreshTdSynnexInvoices({ getRelevantPos: () => relevantPos(store.listAvvik()) })
+    .then((r) => {
+      if (r && r.ok) console.log(`TD Synnex invoices: read ${r.documents} documents, ${r.pos} PO numbers indexed, lines read for ${r.details} invoices`);
+    })
+    .catch(() => {})
+    .then(() => refreshMediusHeads());
+}
+
+// What Medius (dwh medius_invoice_head) says about the TD Synnex invoice numbers of the
+// open Tech Data avvik: do they exist there, as a cost or goods invoice, archived or open.
+// Runs after every TD refresh attempt, since Medius changes independently of TD Synnex.
+async function refreshMediusHeads() {
+  try {
+    const numbers = invoiceNumbersToLookUp(store.listAvvik());
+    if (!numbers.length) return;
+    setMediusHeads(await fetchMediusInvoiceHeadByNumber(numbers));
+    setMediusLines(await fetchMediusInvoiceLinesByNumber(numbers));
+  } catch (err) {
+    console.warn(`Medius lookup of TD Synnex invoice numbers failed, keeping the current info: ${err.message}`);
+  }
+}
+
 async function refreshFromDwh() {
   let result;
   try {
@@ -69,9 +96,11 @@ async function refreshFromDwh() {
     }
   } catch (err) {
     await refreshCustomerOrders();
+    startTdSynnexRefresh();
     throw err;
   }
   result.customerOrders = await refreshCustomerOrders();
+  startTdSynnexRefresh();
   return result;
 }
 
@@ -186,7 +215,7 @@ function createServer() {
       // fresh error response instead of hitting ERR_HTTP_HEADERS_SENT on an
       // already-started one.
       if (req.method === 'GET' && pathname === '/') {
-        const html = renderOpenAvvikPage(store.listAvvik(), store.listNotifications(), store.getLastDwhRefreshAt());
+        const html = renderOpenAvvikPage(store.listAvvik(), store.listNotifications(), store.getLastDwhRefreshAt(), tdInvoiceBadges(store.listAvvik()));
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }
@@ -227,7 +256,7 @@ function createServer() {
       }
 
       if (req.method === 'GET' && pathname === '/finance') {
-        const html = renderFinancePage(store.listAvvik(), store.listNotifications());
+        const html = renderFinancePage(store.listAvvik(), store.listNotifications(), tdInvoiceBadges(store.listAvvik()));
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }
@@ -251,7 +280,12 @@ function createServer() {
           res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
           return res.end('<!DOCTYPE html><html lang="no"><body><p>Fant ikke avviket. <a href="/">Tilbake til Åpne avvik</a></p></body></html>');
         }
-        const html = renderAvvikDetailPage(avvik);
+        const tdInvoices = isTdSynnexSupplier(avvik.supplierName) ? getInvoicesForAvvik(avvik) : [];
+        const html = renderAvvikDetailPage(avvik, {
+          tdInvoices,
+          tdHeads: getMediusHeadsFor(avvik, tdInvoices),
+          invoiceOverview: isTdSynnexSupplier(avvik.supplierName) && avvik.poNumber ? getInvoiceOverview(avvik) : null,
+        });
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(html);
       }
@@ -495,4 +529,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { createServer, refreshFromDwh };
+module.exports = { createServer, refreshFromDwh, refreshMediusHeads };

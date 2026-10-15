@@ -118,6 +118,22 @@ function buildMediusInfo(candidates) {
 // table in this pipeline joins on - a different key, confirmed directly by
 // the user. article_code is included as a double-check that a deviation
 // found for the order is actually on the same line the avvik was raised on.
+// Totals over every medius_order_lines row of one order + article: ordered quantity,
+// the quantity received but not yet connected to an invoice (the open part), the
+// amount, and the unit price (innpris, from the first line - the lines of one
+// article on an order share it in practice). null when there are no lines.
+function summarizeOrderLines(lines) {
+  if (!lines || !lines.length) return null;
+  const num = (v) => (v === null || v === undefined || v === '' ? 0 : Number(v));
+  const first = lines[0].unit_price;
+  return {
+    quantity: lines.reduce((sum, l) => sum + num(l.quantity), 0),
+    openQuantity: lines.reduce((sum, l) => sum + num(l.received_not_connected_quantity), 0),
+    amount: Math.round(lines.reduce((sum, l) => sum + num(l.amount), 0) * 100) / 100,
+    unitPrice: first === null || first === undefined || first === '' ? null : Number(first),
+  };
+}
+
 function buildOrderDeviationKey(orderId, articleNumber) {
   return [orderId, articleNumber].map((v) => String(v ?? '').trim().toLowerCase()).join(':');
 }
@@ -271,9 +287,12 @@ async function syncAvvikFromDwh() {
   // "ordrelinje" card (see invoiceSuggestions.js), not a matching criterion,
   // so a deterministic pick is enough.
   const mediusOrderLineByKey = new Map();
+  const mediusOrderLinesByKey = new Map();
   for (const line of mediusOrderLines) {
     const key = buildOrderLineKey(line.purchase_order, line.article_code);
     if (!mediusOrderLineByKey.has(key)) mediusOrderLineByKey.set(key, line);
+    if (!mediusOrderLinesByKey.has(key)) mediusOrderLinesByKey.set(key, []);
+    mediusOrderLinesByKey.get(key).push(line);
   }
   // Grouped the same way mediusCandidatesByKey is above - every unconnected
   // invoice line sharing an avvik's article+supplier is a candidate for that
@@ -329,6 +348,7 @@ async function syncAvvikFromDwh() {
     // once we know what was actually ordered (mediusOrderLineByKey) - with no
     // such row there's nothing to build a suggestion card set around at all.
     const orderLine = mediusOrderLineByKey.get(buildOrderLineKey(row.supplier_order_number, row.article_number)) || null;
+    const orderLineTotals = summarizeOrderLines(mediusOrderLinesByKey.get(buildOrderLineKey(row.supplier_order_number, row.article_number)) || []);
     const invoiceCandidates = orderLine
       ? invoiceLineCandidatesByKey.get(buildInvoiceLineCandidateKey(row.article_number, row.supplier_id_text)) || []
       : [];
@@ -356,6 +376,14 @@ async function syncAvvikFromDwh() {
       supplierName: orderLine ? orderLine.supplier_name : null,
       // Artikkelnavn key figure - same medius_order_lines row as the supplier.
       articleName: orderLine ? orderLine.article_name : null,
+      // What was ordered for this order + article, summed over ALL its order lines
+      // (an order can have several): quantity, the part not yet connected to an
+      // invoice (open), unit price (innpris) and amount. Used to check a supplier's
+      // invoice line (TD Synnex) against the order; null without any order line.
+      orderQuantity: orderLineTotals ? orderLineTotals.quantity : null,
+      orderOpenQuantity: orderLineTotals ? orderLineTotals.openQuantity : null,
+      orderUnitPrice: orderLineTotals ? orderLineTotals.unitPrice : null,
+      orderAmount: orderLineTotals ? orderLineTotals.amount : null,
       // Display-only key figure (shown as the "Prosjekt" card on the detail
       // page). It's also what the classification above keys on to detect an
       // Internbestilling (project_number = 14000, see dwhQueries.js's Combined
@@ -532,6 +560,7 @@ async function syncCustomerOrdersFromDwh() {
 }
 
 module.exports = {
+  summarizeOrderLines,
   fillOwnersFromPo,
   blankNonPersonOwners,
   fillCustomerOrderDepartments,

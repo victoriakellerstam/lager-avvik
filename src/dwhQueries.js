@@ -1505,7 +1505,29 @@ async function fetchMediusInvoiceHeadByNumber(invoiceNumbers) {
   });
 }
 
+// The invoice lines Medius has for already-known invoice numbers (article, quantity and
+// unit price), for the "Faktura" section on the avvik page: which articles a TD Synnex
+// invoice carries in Medius. Read-only, keyed by invoice_number.
+async function fetchMediusInvoiceLinesByNumber(invoiceNumbers) {
+  if (hasNoKeys(invoiceNumbers)) return [];
+  return withPool(async (pool, sql) => {
+    const result = await withKeys(pool.request(), sql, invoiceNumbers).query(`
+      SELECT
+        invoice_number,
+        line_number,
+        article_code,
+        article_name,
+        quantity,
+        unit_price
+      FROM [dwh].[finance].[medius_invoice_lines]
+      WHERE ${keyFilter('invoice_number', invoiceNumbers)}
+    `);
+    return result.recordset;
+  });
+}
+
 module.exports = {
+  fetchMediusInvoiceLinesByNumber,
   fetchAvvikRows,
   fetchResolvedHistory,
   fetchOpenCustomerOrders,

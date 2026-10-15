@@ -266,7 +266,7 @@ function formatDaysCell(a, dateField) {
 function renderAvvikRow(
   a,
   notifications,
-  { actionButton, dateField, showPurchaserForm, showSku, showDateColumn = true, showNotifiedColumn = true, openList = false, editableType = false, commentButton = false }
+  { actionButton, dateField, showPurchaserForm, showSku, showDateColumn = true, showNotifiedColumn = true, openList = false, editableType = false, commentButton = false, tdBadge = null }
 ) {
   const timesNotified = notifications.filter((n) => n.avvikId === a.id).length;
   const dateValue = dateField === 'resolvedAt' ? a.resolvedAt : a.lastNotifiedAt;
@@ -335,7 +335,7 @@ function renderAvvikRow(
   // navigating straight there.
   return `
     <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-po="${escapeHtml((a.poNumber || '').toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}" data-label-order="${escapeHtml(a.orderId)}" data-label-po="${escapeHtml(a.poNumber || '')}" data-label-purchaser="${escapeHtml(a.purchaserName || '')}" data-label-department="${escapeHtml(a.department || '')}" data-label-type="${escapeHtml(a.discrepancyType)}" data-supplier="${escapeHtml(supplierLabel(a).toLowerCase())}">
-      <td>${escapeHtml(a.orderId)}</td>
+      <td>${escapeHtml(a.orderId)}${renderTdBadge(tdBadge)}</td>
       ${poCell}
       ${statusCell}
       ${skuCell}
@@ -350,14 +350,25 @@ function renderAvvikRow(
     </tr>`;
 }
 
+// The "TD-faktura" mark under the order number (open list and Finance list): the TD Synnex
+// invoice number, or a count when there are several. Orange when something is to be done
+// (not linked in Medius / not in Medius / must be reversed), green when everything is in
+// place; the tooltip lists every number with what is to be done. See tdInvoiceBadges.
+function renderTdBadge(badge) {
+  if (!badge || !badge.numbers || !badge.numbers.length) return '';
+  const text = badge.numbers.length === 1 ? escapeHtml(String(badge.numbers[0])) : `(${badge.numbers.length})`;
+  return `<div class="td-line"><span class="bf-badge td-badge ${badge.attention ? 'td-attn' : 'td-ok'}" title="TD Synnex: ${escapeHtml(badge.tooltip || '')}">TD-faktura ${text}</span></div>`;
+}
+
 // Finance-only cases never get an email, so there's no email-preview UI here.
 // The status column shows the actual discrepancyType badge (not a generic
 // Åpen/Løst) since this table now also holds Kostnadsfaktura — reverser
 // cases alongside genuine Spesielle caser - Finance ones.
-function renderFinanceRow(a) {
+function renderFinanceRow(a, tdBadge = null) {
   return `
-    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-po="${escapeHtml((a.poNumber || '').toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}" data-label-order="${escapeHtml(a.orderId)}" data-label-po="${escapeHtml(a.poNumber || '')}" data-label-purchaser="${escapeHtml(a.purchaserName || '')}" data-label-department="${escapeHtml(a.department || '')}" data-label-type="${escapeHtml(a.discrepancyType)}" data-supplier="${escapeHtml(supplierLabel(a).toLowerCase())}">
-      <td>${escapeHtml(a.orderId)}</td>
+    <tr class="avvik-row" tabindex="0" data-href="/avvik/${encodeURIComponent(a.id)}" data-order="${escapeHtml(a.orderId.toLowerCase())}" data-po="${escapeHtml((a.poNumber || '').toLowerCase())}" data-purchaser="${escapeHtml((a.purchaserName || '').toLowerCase())}" data-department="${escapeHtml((a.department || '').toLowerCase())}" data-type="${escapeHtml(a.discrepancyType.toLowerCase())}" data-label-order="${escapeHtml(a.orderId)}" data-label-po="${escapeHtml(a.poNumber || '')}" data-label-purchaser="${escapeHtml(a.purchaserName || '')}" data-label-department="${escapeHtml(a.department || '')}" data-label-type="${escapeHtml(a.discrepancyType)}" data-label-supplier="${escapeHtml(supplierLabel(a))}" data-supplier="${escapeHtml(supplierLabel(a).toLowerCase())}">
+      <td>${escapeHtml(a.orderId)}${renderTdBadge(tdBadge)}</td>
+      <td>${escapeHtml(supplierLabel(a))}</td>
       <td>${a.purchaserName ? escapeHtml(a.purchaserName) : '—'}</td>
       <td>${a.department ? escapeHtml(a.department) : '—'}</td>
       <td><span class="bf-badge bfc-${getTypeBadgeClass(a.discrepancyType)}-bg">${escapeHtml(a.discrepancyType)}</span></td>
@@ -1239,6 +1250,24 @@ const SHARED_STYLE = `
   .test-dwh-result { font-size: var(--bf-font-size-s); }
   .threshold-form { display: flex; align-items: center; gap: var(--bfs12); flex-wrap: wrap; margin-bottom: var(--bfs16); }
   .amount-cell { text-align: right; white-space: nowrap; }
+  .td-line { margin-top: var(--bfs4); }
+  .td-badge { white-space: nowrap; font-size: var(--bf-font-size-s); }
+  .invoice-section summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: var(--bfs12); margin: 0 0 var(--bfs16); }
+  .invoice-section summary::-webkit-details-marker { display: none; }
+  .invoice-section summary h2 { margin: 0; }
+  .invoice-chevron { transition: transform 0.15s ease; font-size: var(--bf-font-size-l); }
+  .invoice-section details[open] .invoice-chevron { transform: rotate(180deg); }
+  .invoice-bullets { margin: 0; padding-left: var(--bfs24); }
+  .invoice-bullets li { margin: var(--bfs4) 0; }
+  .invoice-bullets ul { margin: var(--bfs4) 0 var(--bfs8); padding-left: var(--bfs24); }
+  .invoice-verdict { font-weight: 600; margin-bottom: var(--bfs12); }
+  .td-badge.td-ok { background: var(--bfc-success); color: #000; }
+  .td-badge.td-attn { background: var(--bfc-warning); color: #000; }
+  .td-detail { font-size: var(--bf-font-size-m); font-weight: 400; opacity: 0.85; }
+  .td-pill { display: inline-block; margin-left: var(--bfs8); padding: 0 var(--bfs8); border: 2px solid var(--bfc-warning); border-radius: 4px; font-size: var(--bf-font-size-m); font-weight: 600; line-height: 1.5; vertical-align: middle; white-space: nowrap; }
+  .td-pill.td-reverse, .td-pill.td-price { border-color: var(--bfc-alert); }
+  .td-pill.td-open { border-color: var(--bfc-success); }
+  .muted-value { opacity: 0.6; }
   .date-filter { flex: 1 1 100%; margin-top: var(--bfs8); }
   .date-range-box { width: fit-content; max-width: 100%; }
   .date-hint { margin: var(--bfs8) 0 0; }
@@ -1885,10 +1914,10 @@ function renderShell(activeKey, title, contentHtml, { showToolbar, headerActions
 </html>`;
 }
 
-function renderOpenAvvikPage(avvikList, notifications, lastUpdatedIso) {
+function renderOpenAvvikPage(avvikList, notifications, lastUpdatedIso, tdBadges = new Map()) {
   const { open, resolved } = splitAvvik(avvikList);
   const openRows = open
-    .map((a) => renderAvvikRow(a, notifications, { showSku: true, showDateColumn: false, showNotifiedColumn: false, openList: true }))
+    .map((a) => renderAvvikRow(a, notifications, { showSku: true, showDateColumn: false, showNotifiedColumn: false, openList: true, tdBadge: tdBadges.get(a.id) || null }))
     .join('');
 
   const content = `
@@ -2234,11 +2263,11 @@ function renderFinanceStats(financeCount, vismaStatusChangeCount, noOwnerCount) 
   </div>`;
 }
 
-function renderFinancePage(avvikList, notifications) {
+function renderFinancePage(avvikList, notifications, tdBadges = new Map()) {
   const { financeCases, vismaStatusChangeCases, noOwnerCases } = splitAvvik(avvikList);
   const noOwnerRows = noOwnerCases.map((a) => renderAvvikRow(a, notifications, { actionButton: 'resolve', dateField: 'lastNotifiedAt', showPurchaserForm: true })).join('');
-  const financeRows = financeCases.map((a) => renderFinanceRow(a)).join('');
-  const vismaStatusChangeRows = vismaStatusChangeCases.map((a) => renderFinanceRow(a)).join('');
+  const financeRows = financeCases.map((a) => renderFinanceRow(a, tdBadges.get(a.id) || null)).join('');
+  const vismaStatusChangeRows = vismaStatusChangeCases.map((a) => renderFinanceRow(a, tdBadges.get(a.id) || null)).join('');
 
   const content = `
 
@@ -2253,9 +2282,10 @@ function renderFinancePage(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th><th></th></tr>
+            <tr><th>Ordre</th><th>Leverandør</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th><th></th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="supplier" placeholder="Filtrer leverandør..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
@@ -2278,9 +2308,10 @@ function renderFinancePage(avvikList, notifications) {
       <div class="section-card">
         <table class="bf-table">
           <thead>
-            <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th><th></th></tr>
+            <tr><th>Ordre</th><th>Leverandør</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak</th><th>Kommentarer</th><th></th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="supplier" placeholder="Filtrer leverandør..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="department" placeholder="Filtrer avdeling..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>
@@ -2378,7 +2409,97 @@ function renderInvoiceCard(invoices, tone = 'neutral') {
     .join('');
   return `
     <div class="bf-card info-card tone-border-${tone}"><div class="bf-card-content">
-      <div class="stat-label">Fakturanummer</div>
+      <div class="stat-label">Fakturanummer - Medius</div>
+      <div class="stat-value invoice-numbers">${items}</div>
+    </div></div>`;
+}
+
+// "Fakturanummer - Medius" for an avvik where TD Synnex has invoices: one row per TD
+// invoice number saying what Medius has under that number ("arkivert kostnadsfaktura",
+// "åpen varefaktura", ... or that it is not in Medius at all), with a link to Medius and
+// a note when Medius has it on another PO or none; then the invoices Medius has linked
+// to the avvik that TD Synnex does not list. heads === null: not looked up yet.
+function renderMediusInvoiceCard(invoices, tdInvoices, heads, poNumber, tone = 'neutral') {
+  const rows = [];
+  const seen = new Set();
+  const noteFor = (head) => {
+    if (!head) return '';
+    if (!head.po) return ' · uten PO i Medius';
+    return String(head.po) !== String(poNumber || '') ? ` · PO i Medius: ${escapeHtml(head.po)}` : '';
+  };
+  const row = (number, { isCreditNote = false, link = null, text, note = '' }) => {
+    const label = `${escapeHtml(String(number))}${isCreditNote ? ' (kreditnota)' : ''}`;
+    const numberHtml = link
+      ? `<a class="bf-link" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" title="Vis ${escapeHtml(String(number))} i Medius">${label}</a>`
+      : label;
+    return `<div>${numberHtml} <span class="td-detail">· ${escapeHtml(text)}${note}</span></div>`;
+  };
+  const linkedByNumber = new Map(invoices.map((inv) => [String(inv.invoiceNumber), inv]));
+  for (const inv of tdInvoices) {
+    const n = String(inv.invoiceNumber);
+    seen.add(n);
+    const head = heads ? heads[n] || null : null;
+    const linked = linkedByNumber.get(n);
+    rows.push(
+      row(n, {
+        isCreditNote: inv.documentType === 'CreditMemo',
+        link: (head && head.link) || (linked && linked.mediusLink) || null,
+        text: heads === null ? 'Medius sjekkes ...' : head ? `finnes i Medius: ${head.label}` : 'finnes ikke i Medius',
+        note: noteFor(head),
+      })
+    );
+  }
+  for (const inv of invoices) {
+    const n = String(inv.invoiceNumber);
+    if (seen.has(n)) continue;
+    const head = heads ? heads[n] || null : null;
+    rows.push(row(n, { isCreditNote: inv.isCreditNote, link: inv.mediusLink || (head && head.link) || null, text: head ? head.label : 'koblet til avviket' }));
+  }
+  return `
+    <div class="bf-card info-card tone-border-${tone}"><div class="bf-card-content">
+      <div class="stat-label">Fakturanummer - Medius</div>
+      <div class="stat-value invoice-numbers">${rows.join('')}</div>
+    </div></div>`;
+}
+
+const TD_DOCUMENT_TYPE_LABELS = { CreditMemo: 'kreditnota', DebitMemo: 'debetnota', ProFormaInvoice: 'proformafaktura' };
+
+const formatTdNumber = (n) => new Intl.NumberFormat('nb-NO', { maximumFractionDigits: 2 }).format(n);
+
+// TD Synnex' own invoice numbers for THIS avvik (the invoices with a line for its
+// article, see tdsynnexInvoices.js), one per row with the line's quantity and unit
+// price. Marked: credit notes; a number Medius does not have ("Ikke i Medius"); a number
+// Medius has as a cost invoice that has to be reversed ("Må reverseres", only on
+// "Kostnadsfaktura — reverser" avvik); a unit price that differs from the order; and
+// a line whose quantity is exactly what is still open on the order. Nothing is shown
+// when TD Synnex has no invoice for the article.
+function renderTdSynnexInvoiceCard(tdInvoices, mediusInvoices, tone = 'neutral', { heads = null } = {}) {
+  if (!tdInvoices.length) return '';
+  const inMedius = new Set(mediusInvoices.map((inv) => String(inv.invoiceNumber)));
+  const items = tdInvoices
+    .map((inv) => {
+      const kind = inv.documentType && inv.documentType !== 'Invoice' ? ` (${TD_DOCUMENT_TYPE_LABELS[inv.documentType] || inv.documentType.toLowerCase()})` : '';
+      const line = (inv.lines || []).find((l) => typeof l.quantity === 'number' && typeof l.unitNetPrice === 'number');
+      const detail = line ? ` <span class="td-detail">· ${formatTdNumber(line.quantity)} stk à ${formatTdNumber(line.unitNetPrice)}</span>` : '';
+      // heads === null: Medius has not been looked up yet, so claim nothing about it.
+      const head = heads ? heads[inv.invoiceNumber] || null : null;
+      const linked = inMedius.has(String(inv.invoiceNumber));
+      const checks = inv.checks || {};
+      const pills = [
+        head && head.mustReverse ? '<span class="td-pill td-reverse">Må reverseres</span>' : '',
+        heads && !head ? '<span class="td-pill td-missing">Ikke i Medius</span>' : '',
+        head && !linked ? '<span class="td-pill td-missing">Ikke koblet til ordrelinjen</span>' : '',
+        typeof checks.priceDiffPercent === 'number'
+          ? `<span class="td-pill td-price">Pris avviker (${checks.priceDiffPercent > 0 ? '+' : ''}${String(checks.priceDiffPercent).replace('.', ',')} %)</span>`
+          : '',
+        checks.coversOpenQuantity ? '<span class="td-pill td-open">Dekker åpent antall</span>' : '',
+      ].filter(Boolean);
+      return `<div>${escapeHtml(String(inv.invoiceNumber))}${escapeHtml(kind)}${detail}${pills.length ? ` ${pills.join(' ')}` : ''}</div>`;
+    })
+    .join('');
+  return `
+    <div class="bf-card info-card tone-border-${tone}"><div class="bf-card-content">
+      <div class="stat-label">Fakturanummer - Leverandør</div>
       <div class="stat-value invoice-numbers">${items}</div>
     </div></div>`;
 }
@@ -2404,12 +2525,166 @@ function renderProcedureSteps(procedure) {
   return `<ul class="procedure-steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`;
 }
 
+// "Anbefalt fremgangsmåte" for Kostnadsfaktura — reverser (a Finance case): built from the
+// status of the invoices (overview: getInvoiceOverview() in tdsynnexInvoices.js, null when
+// there is none, e.g. a supplier other than Tech Data). Finance reverses the archived cost
+// invoice(s) in Medius and connects the goods invoice(s) to the order line; a rest quantity
+// (received, neither resold nor written out) is for the case owner to answer.
+function buildReverseSteps(avvik, overview) {
+  const e = escapeHtml;
+  const invoices = overview ? overview.tdInvoices : [];
+  const relevant = invoices.filter((i) => i.hasArticle);
+  const lineOf = (inv) => {
+    const item = (inv.items || []).find((it) => it.hasArticle);
+    const parts = item ? [typeof item.quantity === 'number' ? `${formatTdNumber(item.quantity)} stk` : '', typeof item.unitNetPrice === 'number' ? `à ${formatTdNumber(item.unitNetPrice)}` : ''].filter(Boolean) : [];
+    return `${e(inv.invoiceNumber)}${inv.documentType === 'CreditMemo' ? ' (kreditnota)' : ''}${parts.length ? ` (${e(parts.join(' '))})` : ''}`;
+  };
+  const toReverse = invoices.filter((i) => i.medius && i.medius.mustReverse && (i.hasArticle || !relevant.length));
+  const toLink = relevant.filter((i) => i.documentType !== 'CreditMemo' && i.medius && !i.medius.mustReverse && !overview.linked.includes(i.invoiceNumber));
+  // A credit note that is itself the cost invoice to reverse is already named in the first step.
+  const credits = relevant.filter((i) => i.documentType === 'CreditMemo' && !toReverse.includes(i));
+  const alreadyLinked = relevant.filter((i) => i.documentType !== 'CreditMemo' && i.medius && !i.medius.mustReverse && overview.linked.includes(i.invoiceNumber));
+
+  const steps = [];
+  steps.push(
+    toReverse.length
+      ? `Finance reverserer kostnadsfakturaen i Medius: ${toReverse.map(lineOf).join(', ')}.`
+      : 'Finance reverserer den arkiverte kostnadsfakturaen på denne PO-en i Medius.'
+  );
+  if (credits.length) steps.push(`Kreditnota fra TD Synnex på samme PO og artikkel: ${credits.map(lineOf).join(', ')}.`);
+  steps.push(
+    toLink.length
+      ? `Finance kobler varefakturaen til ordrelinjen: ${toLink.map(lineOf).join(', ')}.`
+      : alreadyLinked.length
+        ? `Varefakturaen er allerede koblet til ordrelinjen: ${alreadyLinked.map(lineOf).join(', ')}.`
+        : 'Finance kobler varefakturaen til ordrelinjen når kostnadsfakturaen er reversert.'
+  );
+  const total = avvik.totalQuantity;
+  const rest = typeof total === 'number' ? total - (avvik.resoldQuantity || 0) - (avvik.writtenOffQuantity || 0) : 0;
+  if (rest > 0) {
+    steps.push(
+      `Det gjenstår ${rest} av ${total} stk som verken er videresolgt eller skrevet ut. Send melding til sakseier${avvik.purchaserName ? ` (${e(avvik.purchaserName)})` : ''} og be om beskjed om det skal videreselges eller skrives ut.`
+    );
+  }
+  steps.push(`Saken er håndtert når kostnadsfakturaen er reversert og varefakturaen er koblet til innkjøpet${rest > 0 ? ', og sakseier har gitt beskjed om restantallet' : ''}.`);
+  return steps;
+}
+
+// The collapsible "Faktura" section on the page of a Tech Data avvik: what we know about
+// invoices on the avvik's PO, as plain bullets. overview: getInvoiceOverview() in
+// tdsynnexInvoices.js. First a verdict about THIS order line (is an invoice linked in Medius,
+// has TD Synnex invoiced the article, is that invoice in Medius), then every TD Synnex
+// invoice on the PO with its articles, its status in Medius and the articles Medius has
+// on it, then invoices linked to the avvik in Medius that TD Synnex does not list.
+function renderInvoiceSection(avvik, overview, tone = 'neutral') {
+  if (!overview) return '';
+  const e = escapeHtml;
+  const article = avvik.articleNumber || '';
+  const po = avvik.poNumber || '';
+  const qtyText = (n) => (typeof n === 'number' ? `${formatTdNumber(n)} stk` : '');
+  const priceText = (n, currency) => (typeof n === 'number' ? `à ${formatTdNumber(n)}${currency && currency !== 'NOK' ? ` ${currency}` : ''}` : '');
+  const amountsText = (quantity, price, currency) => [qtyText(quantity), priceText(price, currency)].filter(Boolean).join(' ');
+  const mediusStatus = (inv) => {
+    if (!overview.mediusLoaded || inv.medius === undefined) return 'Medius sjekkes ...';
+    if (!inv.medius) return 'finnes ikke i Medius';
+    const head = inv.medius;
+    const label = head.link
+      ? `<a class="bf-link" href="${e(head.link)}" target="_blank" rel="noopener noreferrer">${e(head.label)}</a>`
+      : e(head.label);
+    const note = !head.po ? ' (uten PO i Medius)' : String(head.po) !== String(po) ? ` (PO i Medius: ${head.po})` : '';
+    return `${label}${e(note)}${head.mustReverse ? ' <span class="td-pill td-reverse">Må reverseres</span>' : ''}`;
+  };
+  const mediusLinesHtml = (lines) =>
+    lines && lines.length
+      ? lines
+          .map((l) => {
+            const own = article && l.articleCode && l.articleCode.toUpperCase() === article.toUpperCase();
+            const text = [e(l.articleCode || l.articleName || 'ukjent artikkel'), amountsText(l.quantity, l.unitPrice)].filter(Boolean).join(' · ');
+            return own ? `<strong>${text} (denne varelinjen)</strong>` : text;
+          })
+          .join('; ')
+      : null;
+
+  const withArticle = overview.tdInvoices.filter((i) => i.hasArticle);
+  const unread = overview.tdInvoices.filter((i) => !i.items).length;
+  const articleLabel = `<strong>${e(article)}</strong>`;
+  const notReceived = `Vi har ikke mottatt faktura fra leverandøren på denne varelinjen (artikkel ${articleLabel}).`;
+  let verdict;
+  if (overview.linked.length) {
+    verdict = `Faktura er koblet til denne varelinjen i Medius: ${e(overview.linked.join(', '))}.`;
+  } else if (!overview.tdLoaded) {
+    verdict = `${notReceived} Fakturaene fra TD Synnex er ikke lest inn ennå, så de er ikke sjekket.`;
+  } else if (withArticle.length) {
+    const nums = e(withArticle.map((i) => i.invoiceNumber).join(', '));
+    if (!overview.mediusLoaded) verdict = `TD Synnex har fakturert artikkelen ${articleLabel} (${nums}). Medius sjekkes ...`;
+    else if (withArticle.some((i) => i.medius)) verdict = `TD Synnex har fakturert artikkelen ${articleLabel} (${nums}), og fakturaen finnes i Medius, men den er ikke koblet til denne varelinjen.`;
+    else verdict = `TD Synnex har fakturert artikkelen ${articleLabel} (${nums}), men vi har ikke mottatt fakturaen i Medius.`;
+  } else if (overview.tdInvoices.length) {
+    const n = overview.tdInvoices.length;
+    verdict = `${notReceived} TD Synnex har ${n === 1 ? 'én annen faktura' : `${n} andre fakturaer`} på samme PO, men ${unread ? 'ingen av de innleste inneholder' : n === 1 ? 'den inneholder ikke' : 'ingen av dem inneholder'} denne artikkelen${unread ? ` (linjene på ${unread} er ikke lest ennå)` : ''}.`;
+  } else {
+    verdict = `${notReceived} TD Synnex har heller ingen fakturaer på PO ${e(po)}.`;
+  }
+
+  const sorted = [...overview.tdInvoices].sort((a, b) => Number(b.hasArticle) - Number(a.hasArticle) || String(a.billingDate).localeCompare(String(b.billingDate)));
+  const tdBullets = sorted
+    .map((inv) => {
+      const kind = inv.documentType && inv.documentType !== 'Invoice' ? ` (${e(TD_DOCUMENT_TYPE_LABELS[inv.documentType] || inv.documentType.toLowerCase())})` : '';
+      const items = inv.items
+        ? inv.items.length
+          ? inv.items
+              .map((it) => {
+                const text = [e(it.part || 'ukjent artikkel'), amountsText(it.quantity, it.unitNetPrice, inv.currency)].filter(Boolean).join(' · ');
+                return it.hasArticle ? `<strong>${text} (denne varelinjen)</strong>` : text;
+              })
+              .join('; ')
+          : 'ingen linjer'
+        : 'linjene er ikke lest ennå';
+      const mediusLines = mediusLinesHtml(inv.mediusLines);
+      return `<li>
+        <strong>${e(inv.invoiceNumber)}</strong>${kind} fra TD Synnex på samme PO${inv.billingDate ? `, ${e(inv.billingDate)}` : ''}
+        <ul>
+          <li>Artikler hos TD Synnex: ${items}</li>
+          <li>Status i Medius: ${mediusStatus(inv)}</li>
+          ${mediusLines ? `<li>Artikler i Medius: ${mediusLines}</li>` : inv.medius ? '<li>Artikler i Medius: ingen fakturalinjer funnet</li>' : ''}
+        </ul>
+      </li>`;
+    })
+    .join('');
+  const mediusOnlyBullets = overview.mediusOnly
+    .map((inv) => {
+      const lines = mediusLinesHtml(inv.mediusLines);
+      return `<li>
+        <strong>${e(inv.invoiceNumber)}</strong> i Medius, ikke funnet hos TD Synnex
+        <ul>
+          <li>Status i Medius: ${mediusStatus(inv)}</li>
+          ${lines ? `<li>Artikler i Medius: ${lines}</li>` : ''}
+        </ul>
+      </li>`;
+    })
+    .join('');
+
+  return `
+    <section class="detail-page-section procedure-section invoice-section">
+      <details>
+        <summary><h2>Faktura</h2><i class="fa-solid fa-chevron-down invoice-chevron" aria-hidden="true"></i></summary>
+        <div class="bf-card procedure-card tone-border-${tone}"><div class="bf-card-content">
+          <ul class="invoice-bullets">
+            <li class="invoice-verdict">${verdict}</li>
+            ${tdBullets}
+            ${mediusOnlyBullets}
+          </ul>
+        </div></div>
+      </details>
+    </section>`;
+}
+
 // Detail page for a single avvik/ordrelinje, reached by clicking its row (or
 // its old "Dette må gjøres"/"Mer informasjon" action) anywhere it appears -
 // open avvik, Finance, or Arkiv. Info cards, the header icon links, and
 // links all hide themselves rather than rendering an empty card/field/
 // placeholder when a value is missing.
-function renderAvvikDetailPage(avvik) {
+function renderAvvikDetailPage(avvik, { tdInvoices = [], tdHeads = null, invoiceOverview = null } = {}) {
   const { procedure, links, note } = getAvvikDetailContent(avvik);
   const invoices = getAvvikInvoices(avvik);
 
@@ -2442,7 +2717,8 @@ function renderAvvikDetailPage(avvik) {
       avvikTone,
       avvik.writtenOffStatus ? formatQuantityOfTotal(avvik.writtenOffQuantity, avvik.totalQuantity) : null
     ),
-    renderInvoiceCard(invoices, avvikTone),
+    tdInvoices.length ? renderMediusInvoiceCard(invoices, tdInvoices, tdHeads, avvik.poNumber, avvikTone) : renderInvoiceCard(invoices, avvikTone),
+    renderTdSynnexInvoiceCard(tdInvoices, invoices, avvikTone, { heads: tdHeads }),
   ]
     .filter(Boolean)
     .join('');
@@ -2478,22 +2754,26 @@ function renderAvvikDetailPage(avvik) {
     )
     .join('');
 
-  // Kostnadsfaktura — reverser has nothing actionable to recommend (the note
-  // box above already says why it's resolved) - drop the section entirely.
-  // Spesielle caser - Finance gets the same box treatment but under
+  // Kostnadsfaktura — reverser gets a procedure built from the invoice statuses (see
+  // buildReverseSteps). Spesielle caser - Finance gets the same box treatment but under
   // "Informasjon" instead of "Anbefalt fremgangsmåte", since Finance handles
   // it internally rather than following a suggested procedure - its box is
   // intentionally left empty for now (content still being decided).
   const isSpesielleCaserFinance = isFinanceCase(avvik.discrepancyType);
-  const procedureHeading =
-    avvik.discrepancyType === KOSTNADSFAKTURA_REVERSER ? null : isSpesielleCaserFinance ? 'Informasjon' : 'Anbefalt fremgangsmåte';
-  const procedureBodyHtml = isSpesielleCaserFinance ? '' : `${renderProcedureSteps(procedure)}${linksHtml}`;
+  const isReverse = avvik.discrepancyType === KOSTNADSFAKTURA_REVERSER;
+  const procedureHeading = isSpesielleCaserFinance ? 'Informasjon' : 'Anbefalt fremgangsmåte';
+  const procedureBodyHtml = isSpesielleCaserFinance
+    ? ''
+    : isReverse
+      ? `<ul class="procedure-steps">${buildReverseSteps(avvik, invoiceOverview).map((step) => `<li>${step}</li>`).join('')}</ul>`
+      : `${renderProcedureSteps(procedure)}${linksHtml}`;
 
   const content = `
     <a id="back-link" class="back-link" href="/"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Åpne avvik</a>
 
 
     <div class="info-cards">${infoCards}</div>
+
 
     ${note ? `<section class="detail-page-section">
       <div class="bf-card detail-note"><div class="bf-card-content">
@@ -2507,6 +2787,8 @@ function renderAvvikDetailPage(avvik) {
         ${procedureBodyHtml}
       </div></div>
     </section>` : ''}
+
+    ${renderInvoiceSection(avvik, invoiceOverview, avvikTone)}
 
     <section class="detail-page-section comments-section">
       <h2>Kommentarer og vedlegg</h2>
@@ -2552,6 +2834,7 @@ function renderArchivePage(avvikList, notifications) {
             <tr><th>Ordre</th><th>Innkjøper</th><th>Avdeling</th><th>Avvikstype</th><th>Dager siden mottak til løst</th><th>Løst</th><th></th><th>Kommentarer</th></tr>
             <tr class="filter-row">
               <th><input type="text" class="bf-input filter-input" data-col="order" placeholder="Filtrer ordre..."></th>
+              <th><input type="text" class="bf-input filter-input" data-col="supplier" placeholder="Filtrer leverandør..."></th>
               <th><input type="text" class="bf-input filter-input" data-col="purchaser" placeholder="Filtrer innkjøper..."></th>
               <th></th>
               <th><input type="text" class="bf-input filter-input" data-col="type" placeholder="Filtrer avvikstype..."></th>

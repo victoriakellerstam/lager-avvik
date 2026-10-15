@@ -1,5 +1,50 @@
 'use strict';
 
+// Send bare innloggingsopplysninger til TD Synnex over HTTPS.
+const ALLOWED_HOSTS = [
+  'api.tdsynnex.com',
+  'test.api.tdsynnex.com'
+];
+
+function parseTokenUrl(tokenUrl) {
+  const url = new URL(tokenUrl);
+
+  if (
+    url.protocol !== 'https:' ||
+    !ALLOWED_HOSTS.includes(url.hostname) ||
+    url.pathname !== '/eu/auth/token' ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error('Ugyldig TD Synnex token-adresse.');
+  }
+
+  return url;
+}
+
+// True when all three settings are present (not whether they are valid).
+function isConfigured() {
+  return Boolean(
+    process.env.TD_SYNNEX_CLIENT_ID &&
+    process.env.TECH_DATA &&
+    process.env.TD_SYNNEX_TOKEN_URL
+  );
+}
+
+// The API base for the same environment as the token URL, e.g.
+// https://api.tdsynnex.com/eu (production) or https://test.api.tdsynnex.com/eu.
+function getApiBaseUrl() {
+  const tokenUrl = process.env.TD_SYNNEX_TOKEN_URL;
+
+  if (!tokenUrl) {
+    throw new Error('Mangler TD_SYNNEX_TOKEN_URL.');
+  }
+
+  return `${parseTokenUrl(tokenUrl).origin}/eu`;
+}
+
 async function getAccessToken() {
   const clientId = process.env.TD_SYNNEX_CLIENT_ID;
   const clientSecret = process.env.TECH_DATA;
@@ -11,24 +56,7 @@ async function getAccessToken() {
     );
   }
 
-  // Send bare innloggingsopplysninger til TD Synnex over HTTPS.
-  const url = new URL(tokenUrl);
-  const allowedHosts = [
-    'api.tdsynnex.com',
-    'test.api.tdsynnex.com'
-  ];
-
-  if (
-    url.protocol !== 'https:' ||
-    !allowedHosts.includes(url.hostname) ||
-    url.pathname !== '/eu/auth/token' ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error('Ugyldig TD Synnex token-adresse.');
-  }
+  const url = parseTokenUrl(tokenUrl);
 
   const response = await fetch(url, {
     method: 'POST',
@@ -64,4 +92,4 @@ async function getAccessToken() {
   return data.access_token;
 }
 
-module.exports = { getAccessToken };
+module.exports = { getAccessToken, getApiBaseUrl, isConfigured };
