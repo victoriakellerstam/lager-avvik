@@ -82,6 +82,31 @@ async function refreshMediusHeads() {
   }
 }
 
+// Automatic refresh: the dwh sync (which also refreshes TD Synnex and the Medius status) runs
+// every AUTO_REFRESH_MINUTES (default 60, 0 = off, at least 5), so new avvik get their TD
+// invoice info without anyone pressing "Oppdater fra dwh". A run that is still going
+// is never overlapped by the next one.
+const AUTO_REFRESH_MINUTES = Number(process.env.AUTO_REFRESH_MINUTES ?? 60);
+
+function startAutoRefresh() {
+  if (!(AUTO_REFRESH_MINUTES >= 5)) return null;
+  let running = false;
+  const timer = setInterval(async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await refreshFromDwh();
+      console.log(`dwh auto refresh: ${result.updated} updated, ${result.inserted} inserted, ${result.archived} archived, ${result.reopened} reopened`);
+    } catch (err) {
+      console.warn(`dwh auto refresh failed, keeping current avvik state: ${err.message}`);
+    } finally {
+      running = false;
+    }
+  }, AUTO_REFRESH_MINUTES * 60 * 1000);
+  timer.unref();
+  return timer;
+}
+
 async function refreshFromDwh() {
   let result;
   try {
@@ -500,6 +525,7 @@ if (require.main === module) {
     console.log(`lager-avvik listening on port ${PORT}`);
   });
   startScheduler();
+  startAutoRefresh();
     // Optional authentication test. Never log credentials or tokens.
   if (process.env.TD_SYNNEX_TEST_ON_STARTUP === 'true') {
     getAccessToken()

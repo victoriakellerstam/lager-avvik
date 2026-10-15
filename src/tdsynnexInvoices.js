@@ -166,6 +166,32 @@ function itemMatchKind(article, item) {
   return null;
 }
 
+// The invoices on the given POs whose lines have not been read yet.
+function wantedInvoiceNumbers(getRelevantPos) {
+  const wanted = [];
+  for (const po of new Set([...getRelevantPos()].map(String))) {
+    for (const inv of byPo.get(po) || []) if (!detailsByInvoice.has(inv.invoiceNumber) && !wanted.includes(inv.invoiceNumber)) wanted.push(inv.invoiceNumber);
+  }
+  return wanted;
+}
+
+// Reads the lines of these invoices (stops at the first failure, keeping what was read).
+async function readInvoiceDetails(invoiceNumbers, token, { fetchImpl, sleep }) {
+  let details = 0;
+  for (const invoiceNumber of invoiceNumbers) {
+    try {
+      const read = await fetchInvoiceDetails(invoiceNumber, token, { fetchImpl, sleep });
+      if (read) detailsByInvoice.set(invoiceNumber, read);
+      details++;
+    } catch (err) {
+      console.warn(`TD Synnex invoice lines: stopped, keeping what was read: ${err.message}`);
+      break;
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  return details;
+}
+
 // Never throws: a failure is logged (HTTP status only) and the previous list stays.
 // Returns { skipped }, { ok: true, documents, pos, details, truncated } or { ok: false, error }.
 async function refreshTdSynnexInvoices({
@@ -180,7 +206,24 @@ async function refreshTdSynnexInvoices({
 } = {}) {
   if (running) return running;
   if (!isConfigured()) return { skipped: 'not-configured' };
-  if (!force && now().getTime() - lastAttemptAt < MIN_INTERVAL_MS) return { skipped: 'recent' };
+  if (!force && now().getTime() - lastAttemptAt < MIN_INTERVAL_MS) {
+    // The list of documents was read recently, so it is not read again - but an avvik that
+    // appeared since then still needs the lines of the invoices on its PO.
+    const pending = wantedInvoiceNumbers(getRelevantPos);
+    if (!pending.length) return { skipped: 'recent' };
+    running = (async () => {
+      try {
+        const details = await readInvoiceDetails(pending.slice(0, maxDetails), await getToken(), { fetchImpl, sleep });
+        return { ok: true, documents: 0, pos: byPo.size, details, truncated: false };
+      } catch (err) {
+        console.warn(`TD Synnex invoice lines failed, keeping the current list: ${err.message}`);
+        return { ok: false, error: err.message };
+      } finally {
+        running = null;
+      }
+    })();
+    return running;
+  }
   lastAttemptAt = now().getTime();
   running = (async () => {
     try {
@@ -194,22 +237,7 @@ async function refreshTdSynnexInvoices({
       else console.warn(`TD Synnex invoices: stopped after ${maxPages} pages, the list may be incomplete.`);
 
       // The lines of the invoices on the POs of the open avvik (once per invoice).
-      const wanted = [];
-      for (const po of new Set([...getRelevantPos()].map(String))) {
-        for (const inv of byPo.get(po) || []) if (!detailsByInvoice.has(inv.invoiceNumber) && !wanted.includes(inv.invoiceNumber)) wanted.push(inv.invoiceNumber);
-      }
-      let details = 0;
-      for (const invoiceNumber of wanted.slice(0, maxDetails)) {
-        try {
-          const read = await fetchInvoiceDetails(invoiceNumber, token, { fetchImpl, sleep });
-          if (read) detailsByInvoice.set(invoiceNumber, read);
-          details++;
-        } catch (err) {
-          console.warn(`TD Synnex invoice lines: stopped, keeping what was read: ${err.message}`);
-          break;
-        }
-        await sleep(PAGE_PAUSE_MS);
-      }
+      const details = await readInvoiceDetails(wantedInvoiceNumbers(getRelevantPos).slice(0, maxDetails), token, { fetchImpl, sleep });
       return { ok: true, documents: documents.length, pos: byPo.size, details, truncated };
     } catch (err) {
       console.warn(`TD Synnex invoices refresh failed, keeping the current list: ${err.message}`);

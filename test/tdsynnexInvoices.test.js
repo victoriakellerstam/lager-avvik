@@ -469,3 +469,29 @@ test('Kostnadsfaktura — reverser: the procedure says what Finance reverses and
   assert.match(plainText, /Finance reverserer den arkiverte kostnadsfakturaen på denne PO-en i Medius/);
   assert.doesNotMatch(plainText, /gjenstår/);
 });
+
+test('a refresh inside the 30 minute guard does not re-read the list but still reads the lines for a PO that became relevant', () =>
+  withConfig(CONFIG, async () => {
+    const docs = [detailDoc('A1', '145480', [item('ART-1', 1, 10)]), detailDoc('B2', '150000', [item('ART-5', 1, 10)])];
+    await loadTd(docs, ['145480']); // the PO of B2 has no open avvik yet: its lines are not read
+    assert.equal(td.getInvoicesForAvvik({ poNumber: '150000', articleNumber: 'ART-5' }).length, 0);
+
+    const urls = [];
+    const fetchImpl = async (url) => {
+      const u = String(url);
+      urls.push(u);
+      const n = decodeURIComponent(/InvoiceNumber=([^&]+)/.exec(u)[1]);
+      return response(200, { data: [docs.find((d) => d.invoiceNumber === n)] });
+    };
+    const refresh = (pos) => td.refreshTdSynnexInvoices({ getToken: async () => 't', sleep: noSleep, fetchImpl, getRelevantPos: () => pos });
+
+    assert.deepEqual(await refresh(['145480']), { skipped: 'recent' }); // nothing new to read
+    assert.equal(urls.length, 0);
+
+    const r = await refresh(['145480', '150000']); // a new avvik appeared on 150000
+    assert.equal(r.ok, true);
+    assert.equal(r.details, 1);
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0].includes('InvoiceNumber=B2') && !urls[0].includes('CreatedFrom'));
+    assert.equal(td.getInvoicesForAvvik({ poNumber: '150000', articleNumber: 'ART-5' }).length, 1);
+  }));
